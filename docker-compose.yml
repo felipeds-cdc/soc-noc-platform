@@ -1,0 +1,167 @@
+version: '3.8'
+
+services:
+  # Redis - Message Queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - soc-network
+
+  # Elasticsearch - Log Storage
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - soc-network
+
+  # PostgreSQL - Metadata Storage
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: soc_noc
+      POSTGRES_USER: soc_user
+      POSTGRES_PASSWORD: soc_password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soc_user -d soc_noc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - soc-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - DATABASE_URL=postgresql+asyncpg://soc_user:soc_password123@postgres:5432/soc_noc
+      - SECRET_KEY=change-this-in-production-secret-key
+      - JWT_ALGORITHM=HS256
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - soc-network
+
+  # Frontend Dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - soc-network
+
+  # Honeypot SSH
+  honeypot:
+    build:
+      context: ./honeypot
+      dockerfile: ../docker/Dockerfile.honeypot
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - HONEYPOT_PORT=2222
+      - HONEYPOT_HOST=0.0.0.0
+    ports:
+      - "2222:2222"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - soc-network
+
+  # Log Collector Agent
+  agent:
+    build:
+      context: ./agents
+      dockerfile: ../docker/Dockerfile.agent
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - LOG_FILES=/var/log/auth.log,/var/log/syslog
+    volumes:
+      - /var/log:/host/logs:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - soc-network
+
+  # Event Processor
+  processor:
+    build:
+      context: ./processor
+      dockerfile: ../docker/Dockerfile.processor
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - DATABASE_URL=postgresql+asyncpg://soc_user:soc_password123@postgres:5432/soc_noc
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - soc-network
+
+  # Attack Simulator (para testes em lab)
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: ../docker/Dockerfile.simulator
+    environment:
+      - HONEYPOT_HOST=honeypot
+      - HONEYPOT_PORT=2222
+    depends_on:
+      - honeypot
+    profiles:
+      - simulation
+    networks:
+      - soc-network
+
+volumes:
+  redis_data:
+  es_data:
+  pg_data:
+
+networks:
+  soc-network:
+    driver: bridge

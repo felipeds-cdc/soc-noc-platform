@@ -1,0 +1,2 @@
+redis==5.0.*
+aioredis==2.0.*
