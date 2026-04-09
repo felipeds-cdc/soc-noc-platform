@@ -15,7 +15,7 @@ Antes de começar, certifique-se de ter:
 
 ```bash
 git clone <url-do-repositorio>
-cd QWENcode
+cd soc-noc-platform
 ```
 
 ### 2. Configure as Variáveis de Ambiente
