@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY agents/requirements.txt .
+# context já é ./agents — não repetir o prefixo nos caminhos
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agents/ .
+COPY . .
 
 CMD ["python", "collector.py"]

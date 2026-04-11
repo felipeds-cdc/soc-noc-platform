@@ -7,10 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt .
+# context é ./backend — sem prefixo nos caminhos
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ .
+# BUG CORRIGIDO: "COPY .." é inválido — copia o contexto inteiro para /app
+COPY . .
 
 EXPOSE 8000
 

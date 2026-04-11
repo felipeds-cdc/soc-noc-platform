@@ -5,12 +5,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir /var/run/sshd
+    && mkdir -p /var/run/sshd
 
-COPY honeypot/requirements.txt .
+COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY honeypot/ .
+COPY . .
 
 EXPOSE 2222
 

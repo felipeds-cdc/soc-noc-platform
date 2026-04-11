@@ -1,4 +1,4 @@
 asyncssh==2.14.*
 redis==5.0.*
-python-geoip2==0.1.*
+geoip2==0.1.*
 maxminddb==2.5.*

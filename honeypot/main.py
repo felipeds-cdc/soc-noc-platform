@@ -65,7 +65,7 @@ SSH_BANNER = 'OpenSSH_8.9p1 Ubuntu-3ubuntu0.4'
 
 class HoneypotSession:
     """Gerencia uma sessão individual do honeypot."""
-    
+
     def __init__(self, source_ip: str, source_port: int):
         self.session_id = str(uuid.uuid4())
         self.source_ip = source_ip
@@ -76,8 +76,12 @@ class HoneypotSession:
         self.commands_executed = []
         self.started_at = datetime.utcnow()
         self.ended_at = None
-        
+
     def to_dict(self) -> dict:
+        # BUG CORRIGIDO: parêntese errado causava subtração antes do `or`.
+        # Antes: (self.ended_at or datetime.utcnow() - self.started_at).total_seconds()
+        # Depois: ((self.ended_at or datetime.utcnow()) - self.started_at).total_seconds()
+        duration = int(((self.ended_at or datetime.utcnow()) - self.started_at).total_seconds())
         return {
             'session_id': self.session_id,
             'source_ip': self.source_ip,
@@ -86,7 +90,7 @@ class HoneypotSession:
             'password': self.password,
             'login_success': self.login_success,
             'commands_executed': json.dumps(self.commands_executed),
-            'session_duration': int((self.ended_at or datetime.utcnow() - self.started_at).total_seconds()),
+            'session_duration': duration,
             'started_at': self.started_at.isoformat(),
             'ended_at': self.ended_at.isoformat() if self.ended_at else None,
         }
@@ -94,16 +98,16 @@ class HoneypotSession:
 
 class HoneypotServer:
     """Servidor principal do honeypot SSH."""
-    
+
     def __init__(self):
         self.redis: Optional[aioredis.Redis] = None
         self.active_sessions = {}
-        
+
     async def initialize(self):
         """Inicializa conexões e recursos."""
         self.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
         logger.info(f"Honeypot SSH inicializado - Redis: {REDIS_URL}")
-        
+
     async def publish_event(self, event_type: str, data: dict):
         """Publica evento no Redis Streams."""
         event = {
@@ -114,7 +118,7 @@ class HoneypotServer:
         }
         await self.redis.xadd('soc_events', event)
         logger.debug(f"Evento publicado: {event_type}")
-        
+
     async def publish_session_data(self, session: HoneypotSession):
         """Publica dados da sessão no Redis."""
         event = {
@@ -125,69 +129,43 @@ class HoneypotServer:
         }
         await self.redis.xadd('soc_events', event)
         logger.info(f"Sessão registrada: {session.session_id} de {session.source_ip}")
-        
-    async def handle_login(self, username: str, password: str, source_ip: str, source_port: int) -> bool:
-        """Processa tentativa de login."""
-        # Aceita qualquer credencial para capturar os dados
-        self.login_success = True
-        
-        session = HoneypotSession(source_ip, source_port)
-        session.username = username
-        session.password = password
-        session.login_success = True
-        self.active_sessions[session.session_id] = session
-        
-        # Publica evento de login
-        await self.publish_event('honeypot_login', {
-            'session_id': session.session_id,
-            'username': username,
-            'password': password,
-            'source_ip': source_ip,
-            'source_port': source_port,
-            'success': True,
-            'mitre_technique_id': 'T1110',  # Brute Force
-            'mitre_tactic': 'Credential Access'
-        })
-        
-        logger.info(f"Login capturado: {username}:{password} de {source_ip}:{source_port}")
-        return True
-    
+
     async def handle_command(self, session_id: str, command: str) -> str:
         """Processa comando executado na sessão."""
         session = self.active_sessions.get(session_id)
         if not session:
             return 'Session not found'
-            
+
         # Registra comando
         command_entry = {
             'command': command,
             'timestamp': datetime.utcnow().isoformat()
         }
         session.commands_executed.append(command_entry)
-        
+
         # Publica evento de comando
         await self.publish_event('honeypot_command', {
             'session_id': session_id,
             'command': command,
             'source_ip': session.source_ip,
             'username': session.username,
-            'mitre_technique_id': 'T1059',  # Command and Scripting Interpreter
+            'mitre_technique_id': 'T1059',
             'mitre_tactic': 'Execution'
         })
-        
+
         logger.info(f"Comando [{session.source_ip}]: {command}")
-        
+
         # Retorna resposta simulada
         cmd_base = command.strip().split()[0] if command.strip() else ''
         if command.strip() in SIMULATED_COMMANDS:
             return SIMULATED_COMMANDS[command.strip()]
         elif cmd_base in SIMULATED_COMMANDS:
             return SIMULATED_COMMANDS[cmd_base]
-        elif command.strip() == 'exit' or command.strip() == 'logout':
+        elif command.strip() in ('exit', 'logout'):
             return '__DISCONNECT__'
         else:
             return f'bash: {command.strip()}: command not found'
-    
+
     async def handle_session_end(self, session_id: str):
         """Finaliza sessão e publica dados."""
         session = self.active_sessions.pop(session_id, None)
@@ -199,37 +177,37 @@ class HoneypotServer:
 
 class HoneypotSSHServerSession(asyncssh.SSHServer):
     """Sessão do servidor SSH do honeypot."""
-    
+
     def __init__(self, honeypot: HoneypotServer):
         self.honeypot = honeypot
         self.session_id = None
         self.source_ip = None
         self.source_port = None
-        
+
     def connection_made(self, conn):
         self.source_ip = conn.get_extra_info('peername')[0]
         self.source_port = conn.get_extra_info('peername')[1]
         logger.info(f"Conexão recebida de {self.source_ip}:{self.source_port}")
-        
+
     def connection_lost(self, exc):
+        # BUG CORRIGIDO: session_end agora é chamado APENAS aqui (no nível do
+        # servidor SSH), evitando chamada dupla com HoneypotSSHSession.connection_lost.
         if self.session_id:
             asyncio.create_task(self.honeypot.handle_session_end(self.session_id))
         logger.info(f"Conexão encerrada de {self.source_ip}")
-        
+
     def password_auth_supported(self):
         return True
-        
+
     def validate_auth_password(self, username: str, password: str) -> bool:
         """Valida credenciais (sempre retorna True para honeypot)."""
-        # Cria sessão
         session = HoneypotSession(self.source_ip, self.source_port)
         session.username = username
         session.password = password
         session.login_success = True
         self.session_id = session.session_id
         self.honeypot.active_sessions[session.session_id] = session
-        
-        # Publica evento async
+
         asyncio.create_task(self.honeypot.publish_event('honeypot_login', {
             'session_id': session.session_id,
             'username': username,
@@ -240,91 +218,121 @@ class HoneypotSSHServerSession(asyncssh.SSHServer):
             'mitre_technique_id': 'T1110',
             'mitre_tactic': 'Credential Access'
         }))
-        
+
+        logger.info(f"Login capturado: {username}:{password} de {self.source_ip}:{self.source_port}")
         return True
-        
-    def begin_session(self):
-        """Inicia nova sessão."""
+
+    def session_requested(self):
+        """Inicia nova sessão interativa."""
         logger.info(f"Sessão iniciada: {self.session_id} de {self.source_ip}")
+        # BUG CORRIGIDO: era begin_session() que não existe na API do asyncssh.
+        # O método correto é session_requested(), que retorna um SSHServerSession.
         return HoneypotSSHSession(self.honeypot, self.session_id)
 
 
 class HoneypotSSHSession(asyncssh.SSHServerSession):
-    """Sessão interactive do honeypot."""
-    
+    """Sessão interativa do honeypot."""
+
     def __init__(self, honeypot: HoneypotServer, session_id: str):
         self.honeypot = honeypot
         self.session_id = session_id
         self._chan = None
-        
+        self._input_buffer = ''
+
     def connection_made(self, chan):
         self._chan = chan
-        # Envia banner
-        self._chan.write('\n')
-        self._chan.write('='*60 + '\n')
-        self._chan.write('  ⚠️  AUTHORIZED ACCESS ONLY  ⚠️\n')
-        self._chan.write('  This system is monitored and all activity is logged.\n')
-        self._chan.write('  Unauthorized access is prohibited.\n')
-        self._chan.write('='*60 + '\n\n')
-        self._chan.write('Welcome to Ubuntu 22.04.3 LTS\n\n')
-        self._chan.write('Last login: Mon Apr  7 09:00:00 2026 from 192.168.1.1\n')
+        self._chan.write('\r\n')
+        self._chan.write('=' * 60 + '\r\n')
+        self._chan.write('  ⚠️  AUTHORIZED ACCESS ONLY  ⚠️\r\n')
+        self._chan.write('  This system is monitored and all activity is logged.\r\n')
+        self._chan.write('  Unauthorized access is prohibited.\r\n')
+        self._chan.write('=' * 60 + '\r\n\r\n')
+        self._chan.write('Welcome to Ubuntu 22.04.3 LTS\r\n\r\n')
+        self._chan.write('Last login: Mon Apr  7 09:00:00 2026 from 192.168.1.1\r\n')
+        self._write_prompt()
+
+    def _write_prompt(self):
         self._chan.write('root@honeypot:~# ')
-        
-    def shell_received(self, term_type, width, height):
-        """Shell interativo recebido."""
-        pass
-        
-    def exec_received(self, command, want_reply):
-        """Comando direto recebido (sem shell interativo)."""
-        pass
-        
+
+    def shell_requested(self):
+        return True
+
     def data_received(self, data, data_type):
-        """Dados recebidos do cliente."""
-        if self._chan:
-            self._chan.write('\r\nroot@honeypot:~# ')
-            
+        """
+        BUG CORRIGIDO: antes apenas imprimia o prompt sem processar o comando.
+        Agora acumula input até receber Enter e executa o comando correspondente.
+        """
+        if not self._chan:
+            return
+
+        for char in data:
+            if char in ('\r', '\n'):
+                # Eco da quebra de linha
+                self._chan.write('\r\n')
+                command = self._input_buffer.strip()
+                self._input_buffer = ''
+
+                if command:
+                    asyncio.create_task(self._handle_command(command))
+                else:
+                    self._write_prompt()
+            elif char == '\x7f':  # Backspace
+                if self._input_buffer:
+                    self._input_buffer = self._input_buffer[:-1]
+                    self._chan.write('\b \b')
+            elif char == '\x03':  # Ctrl+C
+                self._input_buffer = ''
+                self._chan.write('^C\r\n')
+                self._write_prompt()
+            else:
+                self._input_buffer += char
+                self._chan.write(char)  # Eco do caractere
+
+    async def _handle_command(self, command: str):
+        """Executa o comando no honeypot e escreve a resposta."""
+        response = await self.honeypot.handle_command(self.session_id, command)
+        if response == '__DISCONNECT__':
+            self._chan.write('logout\r\n')
+            self._chan.close()
+        else:
+            self._chan.write(response + '\r\n')
+            self._write_prompt()
+
     def connection_lost(self, exc):
-        """Conexão perdida."""
-        if self.session_id:
-            asyncio.create_task(self.honeypot.handle_session_end(self.session_id))
+        # BUG CORRIGIDO: session_end removido daqui para evitar chamada dupla.
+        # O encerramento da sessão é responsabilidade de HoneypotSSHServerSession.connection_lost.
+        pass
 
 
 async def start_honeypot():
     """Inicia o servidor honeypot."""
     honeypot = HoneypotServer()
     await honeypot.initialize()
-    
-    # Configurações do servidor SSH
-    server_config = {
-        'server_host_keys': ['/etc/ssh/ssh_host_rsa_key'],
-        'process_factory': HoneypotSSHServerSession(honeypot),
-    }
-    
+
     # Gera chaves SSH se não existirem
     if not os.path.exists('/etc/ssh/ssh_host_rsa_key'):
         os.makedirs('/etc/ssh', exist_ok=True)
         os.system('ssh-keygen -t rsa -b 2048 -f /etc/ssh/ssh_host_rsa_key -N ""')
-    
+
     logger.info(f"Iniciando honeypot SSH em {HONEYPOT_HOST}:{HONEYPOT_PORT}")
     logger.info("⚠️  AVISO: Este honeypot é destinado APENAS para ambientes laboratoriais!")
-    
-    # Inicia servidor (simplificado - em produção usar configuração adequada)
+
+    # BUG CORRIGIDO: antes passava process_factory duplicado e com tipo errado.
+    # `server_factory` recebe um callable que retorna SSHServer (HoneypotSSHServerSession).
+    # Não deve passar process_factory aqui — a sessão é retornada por session_requested().
     try:
         await asyncssh.create_server(
             lambda: HoneypotSSHServerSession(honeypot),
             HONEYPOT_HOST,
             HONEYPOT_PORT,
             server_host_keys=['/etc/ssh/ssh_host_rsa_key'],
-            process_factory=lambda: HoneypotSSHServerSession(honeypot),
             banner=SSH_BANNER,
-            authorized_client_keys=None,  # Desabilita autenticação de cliente
             password_auth=True,
             public_key_auth=False,
             keyboard_interactive_auth=False,
         )
         logger.info(f"Honeypot SSH ouvindo em {HONEYPOT_HOST}:{HONEYPOT_PORT}")
-        
-        # Mantém rodando
+
         await asyncio.Event().wait()
     except Exception as e:
         logger.error(f"Erro ao iniciar honeypot: {e}")

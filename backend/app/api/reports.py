@@ -5,12 +5,13 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from datetime import datetime
 import uuid
+import json
 import markdown
 from jinja2 import Template
 
 from app.models import ReportRequest, ReportResponse
 from app.security import get_current_user, require_analyst_or_admin
-from app.database import get_db
+from app.main import es_client
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
 
@@ -18,27 +19,20 @@ router = APIRouter(prefix="/api/reports", tags=["Reports"])
 @router.post("/generate", response_model=ReportResponse)
 async def generate_report(
     report_data: ReportRequest,
-    db=Depends(get_db),
     current_user: dict = Depends(require_analyst_or_admin)
 ):
     """Gera relatório profissional."""
-    from elasticsearch import AsyncElasticsearch
-    from app.config import get_settings
-    
-    settings = get_settings()
-    es = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
-    
     try:
         start_time = report_data.start_time or datetime.utcnow().replace(hour=0, minute=0, second=0)
         end_time = report_data.end_time or datetime.utcnow()
-        
+
         # Coleta dados para o relatório
-        events_count = await es.count(
+        events_count = await es_client.count(
             index="soc_events",
             query={"range": {"timestamp": {"gte": start_time.isoformat(), "lte": end_time.isoformat()}}}
         )
-        
-        severity_agg = await es.search(
+
+        severity_agg = await es_client.search(
             index="soc_events",
             size=0,
             query={"range": {"timestamp": {"gte": start_time.isoformat(), "lte": end_time.isoformat()}}},
@@ -49,12 +43,12 @@ async def generate_report(
                 "by_country": {"terms": {"field": "geo_country", "size": 10}}
             }
         )
-        
-        honeypot_sessions = await es.count(
+
+        honeypot_sessions = await es_client.count(
             index="honeypot_sessions",
             query={"range": {"started_at": {"gte": start_time.isoformat(), "lte": end_time.isoformat()}}}
         )
-        
+
         aggs = severity_agg.get('aggregations', {})
         
         # Gera conteúdo Markdown
@@ -170,9 +164,13 @@ Os seguintes indicadores foram identificados durante o período:
             generated_at=datetime.utcnow(),
             content=content
         )
-        
-    finally:
-        await es.close()
+
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao gerar relatório: {str(e)}"
+        )
 
 
 @router.get("/templates")

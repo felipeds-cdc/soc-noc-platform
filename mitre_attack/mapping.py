@@ -84,7 +84,7 @@ MITRE_ATTACK_DB: Dict[str, MITRETechnique] = {
         name='Application Layer Protocol',
         tactic='Command and Control',
         description='Comunicação C2 via protocolos de aplicação',
-       _detection_rules=['unusual_http_patterns', 'dns_tunneling'],
+        detection_rules=['unusual_http_patterns', 'dns_tunneling'],
         severity='critical'
     ),
     'T1048': MITRETechnique(
