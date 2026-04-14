@@ -2,11 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install asyncssh redis
-
-COPY simulator/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY simulator/ .
+COPY . .
 
 CMD ["python", "main.py"]

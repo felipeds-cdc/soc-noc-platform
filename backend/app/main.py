@@ -6,6 +6,7 @@ honeypot, threat hunting e relatórios.
 
 ⚠️ AVISO ÉTICO: Use apenas em ambientes controlados e autorizados.
 """
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -39,16 +40,19 @@ async def lifespan(app: FastAPI):
     # Redis
     redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     await redis_client.ping()
+    app.state.redis_client = redis_client
     print(f"✓ Redis conectado: {settings.REDIS_URL}")
     
     # Elasticsearch
     es_client = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
     health = await es_client.cluster.health()
+    app.state.es_client = es_client
     print(f"✓ Elasticsearch conectado: {health.get('status', 'unknown')}")
     
     # PostgreSQL
     pg_url = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql://')
     pg_pool = await asyncpg.create_pool(pg_url)
+    app.state.pg_pool = pg_pool
     print(f"✓ PostgreSQL conectado: {settings.DATABASE_URL}")
     
     print("\n🚀 Backend API iniciado!")
@@ -75,11 +79,12 @@ app = FastAPI(
 )
 
 # CORS
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, restringir origens
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -93,29 +98,38 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "services": {}
     }
-    
+
     # Redis
     try:
-        await redis_client.ping()
-        status["services"]["redis"] = "connected"
-    except:
+        if redis_client:
+            await redis_client.ping()
+            status["services"]["redis"] = "connected"
+        else:
+            status["services"]["redis"] = "not_initialized"
+    except Exception:
         status["services"]["redis"] = "disconnected"
         status["status"] = "degraded"
-        
+
     # Elasticsearch
     try:
-        health = await es_client.cluster.health()
-        status["services"]["elasticsearch"] = health.get('status', 'unknown')
-    except:
+        if es_client:
+            health = await es_client.cluster.health()
+            status["services"]["elasticsearch"] = health.get('status', 'unknown')
+        else:
+            status["services"]["elasticsearch"] = "not_initialized"
+    except Exception:
         status["services"]["elasticsearch"] = "disconnected"
         status["status"] = "degraded"
-        
+
     # PostgreSQL
     try:
-        async with pg_pool.acquire() as conn:
-            await conn.fetchval('SELECT 1')
-        status["services"]["postgresql"] = "connected"
-    except:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.fetchval('SELECT 1')
+            status["services"]["postgresql"] = "connected"
+        else:
+            status["services"]["postgresql"] = "not_initialized"
+    except Exception:
         status["services"]["postgresql"] = "disconnected"
         status["status"] = "degraded"
         

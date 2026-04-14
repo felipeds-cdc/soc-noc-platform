@@ -89,7 +89,7 @@ class HoneypotSession:
             'username': self.username,
             'password': self.password,
             'login_success': self.login_success,
-            'commands_executed': json.dumps(self.commands_executed),
+            'commands_executed': self.commands_executed,  # Lista nativa, não string JSON
             'session_duration': duration,
             'started_at': self.started_at.isoformat(),
             'ended_at': self.ended_at.isoformat() if self.ended_at else None,
@@ -311,8 +311,12 @@ async def start_honeypot():
 
     # Gera chaves SSH se não existirem
     if not os.path.exists('/etc/ssh/ssh_host_rsa_key'):
+        import subprocess
         os.makedirs('/etc/ssh', exist_ok=True)
-        os.system('ssh-keygen -t rsa -b 2048 -f /etc/ssh/ssh_host_rsa_key -N ""')
+        subprocess.run(
+            ['ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', '/etc/ssh/ssh_host_rsa_key', '-N', ''],
+            check=True, capture_output=True
+        )
 
     logger.info(f"Iniciando honeypot SSH em {HONEYPOT_HOST}:{HONEYPOT_PORT}")
     logger.info("⚠️  AVISO: Este honeypot é destinado APENAS para ambientes laboratoriais!")
@@ -326,10 +330,10 @@ async def start_honeypot():
             HONEYPOT_HOST,
             HONEYPOT_PORT,
             server_host_keys=['/etc/ssh/ssh_host_rsa_key'],
-            banner=SSH_BANNER,
+            server_version=SSH_BANNER,
             password_auth=True,
             public_key_auth=False,
-            keyboard_interactive_auth=False,
+            kbdint_auth=False,
         )
         logger.info(f"Honeypot SSH ouvindo em {HONEYPOT_HOST}:{HONEYPOT_PORT}")
 

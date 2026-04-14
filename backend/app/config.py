@@ -17,15 +17,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://soc_user:soc_password123@localhost:5432/soc_noc"
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
-    
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
-    
+
     # Elasticsearch
     ELASTICSEARCH_URL: str = "http://localhost:9200"
-    
+
     # JWT Auth
-    SECRET_KEY: str = "change-this-in-production-secret-key-very-long-and-secure"
+    SECRET_KEY: str = ""  # DEVE ser definido via variável de ambiente SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_MINUTES: int = 60
     

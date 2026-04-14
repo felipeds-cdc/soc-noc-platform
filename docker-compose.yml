@@ -38,15 +38,15 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: soc_noc
-      POSTGRES_USER: soc_user
-      POSTGRES_PASSWORD: soc_password123
+      POSTGRES_USER: ${POSTGRES_USER:-soc_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc_dev_password_CHANGE_ME}
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U soc_user -d soc_noc"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc_user} -d soc_noc"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -61,9 +61,11 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-      - DATABASE_URL=postgresql+asyncpg://soc_user:soc_password123@postgres:5432/soc_noc
-      - SECRET_KEY=change-this-in-production-secret-key
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://soc_user:soc_dev_password_CHANGE_ME@postgres:5432/soc_noc}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-me}
       - JWT_ALGORITHM=HS256
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+      - DEBUG=true
     ports:
       - "8000:8000"
     depends_on:
@@ -129,7 +131,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-      - DATABASE_URL=postgresql+asyncpg://soc_user:soc_password123@postgres:5432/soc_noc
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://soc_user:soc_dev_password_CHANGE_ME@postgres:5432/soc_noc}
     depends_on:
       redis:
         condition: service_healthy

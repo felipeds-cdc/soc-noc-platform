@@ -177,7 +177,7 @@ class EventProcessor:
                         'password': {'type': 'keyword'},
                         'started_at': {'type': 'date'},
                         'ended_at': {'type': 'date'},
-                        'commands_executed': {'type': 'nested'},
+                        'commands_executed': {'type': 'keyword'},
                         'geo_country': {'type': 'keyword'},
                         'geo_latitude': {'type': 'float'},
                         'geo_longitude': {'type': 'float'},

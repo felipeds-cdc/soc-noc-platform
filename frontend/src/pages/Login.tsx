@@ -66,7 +66,7 @@ export default function Login() {
         </form>
 
         <p style={{ marginTop: '20px', fontSize: '0.85rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-          Credenciais padrão: <code>admin / admin123</code>
+          Entre em contato com o administrador para obter credenciais de acesso.
         </p>
       </div>
     </div>

@@ -302,7 +302,7 @@ class AlertService:
             params.append(severity)
             param_count += 1
             
-        query += " ORDER BY created_at DESC LIMIT ${param_count} OFFSET ${param_count + 1}"
+        query += f" ORDER BY created_at DESC LIMIT ${param_count} OFFSET ${param_count + 1}"
         params.extend([page_size, (page - 1) * page_size])
         
         async with self.db_pool.acquire() as conn:
@@ -321,13 +321,33 @@ class AlertService:
     async def update_alert_status(self, alert_id: str, status: str) -> Optional[dict]:
         """Atualiza status do alerta."""
         async with self.db_pool.acquire() as conn:
-            row = await conn.fetchrow(
+            if status == "acknowledged":
+                query = """
+                    UPDATE alerts SET status = $1, acknowledged_at = NOW()
+                    WHERE id = $2
+                    RETURNING *
                 """
-                UPDATE alerts SET status = $1, acknowledged_at = NOW()
-                WHERE id = $2
-                RETURNING *
-                """,
-                status, uuid.UUID(alert_id)
+            elif status == "resolved":
+                query = """
+                    UPDATE alerts SET status = $1, resolved_at = NOW()
+                    WHERE id = $2
+                    RETURNING *
+                """
+            else:
+                query = """
+                    UPDATE alerts SET status = $1
+                    WHERE id = $2
+                    RETURNING *
+                """
+            row = await conn.fetchrow(query, status, uuid.UUID(alert_id))
+            return dict(row) if row else None
+
+    async def get_alert(self, alert_id: str) -> Optional[dict]:
+        """Obtém alerta por ID."""
+        async with self.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alerts WHERE id = $1",
+                uuid.UUID(alert_id)
             )
             return dict(row) if row else None
 
@@ -454,9 +474,13 @@ class DashboardService:
             query={"term": {"event_type": "port_scan"}}
         )
         
+        # Total alerts (critical + high)
+        total_alerts = (critical.get('count', 0) if isinstance(critical, dict) else 0) + \
+                       (high.get('count', 0) if isinstance(high, dict) else 0)
+
         return {
             "total_events_24h": events_24h.get('count', 0) if isinstance(events_24h, dict) else 0,
-            "total_alerts_24h": critical.get('count', 0) + high.get('count', 0) if isinstance(critical, dict) else 0,
+            "total_alerts_24h": total_alerts,
             "critical_alerts": critical.get('count', 0) if isinstance(critical, dict) else 0,
             "high_alerts": high.get('count', 0) if isinstance(high, dict) else 0,
             "unique_source_ips": ip_agg.get('aggregations', {}).get('unique_ips', {}).get('value', 0),
@@ -467,7 +491,8 @@ class DashboardService:
         
     async def get_time_series(self, interval: str = "1h") -> dict:
         """Obtém séries temporais para gráficos."""
-        response = await self.es.search(
+        # Events over time
+        events_response = await self.es.search(
             index="soc_events",
             size=0,
             aggs={
@@ -479,15 +504,18 @@ class DashboardService:
                 }
             }
         )
-        
+
         events = []
-        for bucket in response.get('aggregations', {}).get('events_over_time', {}).get('buckets', []):
+        for bucket in events_response.get('aggregations', {}).get('events_over_time', {}).get('buckets', []):
             events.append({
                 "timestamp": bucket['key_as_string'],
                 "count": bucket['doc_count']
             })
-            
-        return {"events": events}
+
+        # Alerts over time (placeholder)
+        alerts = []
+
+        return {"events": events, "alerts": alerts}
         
     async def get_top_items(self) -> dict:
         """Obtém top itens para dashboard."""

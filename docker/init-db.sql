@@ -155,10 +155,10 @@ CREATE INDEX IF NOT EXISTS idx_iocs_type ON iocs(type);
 -- Índice full-text para busca de logs
 CREATE INDEX IF NOT EXISTS idx_events_raw_log_gin ON events USING gin (raw_log gin_trgm_ops);
 
--- Inserir usuário admin padrão (senha: admin123 - hash bcrypt)
-INSERT INTO users (username, password_hash, email, role) VALUES
-('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYILp92S.0i', 'admin@soc.local', 'admin')
-ON CONFLICT (username) DO NOTHING;
+-- Inserir usuário admin padrão (senha deve ser alterada no primeiro acesso)
+-- O hash é gerado dinamicamente — execute o script setup_admin.py para criar o admin
+-- ou defina a variável de ambiente ADMIN_PASSWORD na inicialização.
+-- NOTA: Em produção, NUNCA use credenciais padrão. Gere senhas fortes aleatórias.
 
 -- Inserir tenant padrão
 INSERT INTO tenants (name, description) VALUES

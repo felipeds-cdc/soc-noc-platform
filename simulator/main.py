@@ -24,9 +24,11 @@ logging.basicConfig(
 logger = logging.getLogger('simulator')
 
 # Configurações
-HONEYPOT_HOST = 'honeypot'
-HONEYPOT_PORT = 2222
-REDIS_URL = 'redis://redis:6379'
+import os
+
+HONEYPOT_HOST = os.getenv('HONEYPOT_HOST', 'honeypot')
+HONEYPOT_PORT = int(os.getenv('HONEYPOT_PORT', '2222'))
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
 
 # Usuários e senhas para simulação
 USERNAMES = ['root', 'admin', 'ubuntu', 'test', 'oracle', 'postgres', 'mysql', 'ftp', 'user']
