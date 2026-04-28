@@ -7,9 +7,14 @@ import time
 import json
 
 from app.models import ThreatHuntQuery, ThreatHuntResult, IPAnalysisResponse
-from app.security import get_current_user, require_analyst_or_admin
+from app.security import require_analyst_or_admin
 
 router = APIRouter(prefix="/api/threat-hunting", tags=["Threat Hunting"])
+
+
+def _keyword_field(field: str) -> str:
+    keyword_compatible = {"source_ip", "event_type", "severity", "status", "username"}
+    return f"{field}.keyword" if field in keyword_compatible else field
 
 
 @router.post("/search", response_model=ThreatHuntResult)
@@ -19,46 +24,47 @@ async def search_events(
     current_user: dict = Depends(require_analyst_or_admin)
 ):
     """Busca eventos customizados para threat hunting."""
-    from app.config import get_settings
     from fastapi import HTTPException
 
     es_client = request.app.state.es_client
     start_time = time.time()
 
     try:
-        if search_query.query.startswith('{'):
+        if search_query.query.strip().startswith('{'):
             try:
-                query_body = json.loads(search_query.query)
+                loaded = json.loads(search_query.query)
+                query_body = loaded.get("query", loaded) if isinstance(loaded, dict) else loaded
             except json.JSONDecodeError as e:
                 raise HTTPException(status_code=400, detail=f"Query DSL inválida: {str(e)}")
         else:
-            query_body = {"query_string": {"query": search_query.query, "default_field": "*"}}
+            query_body = {
+                "bool": {
+                    "must": [{"query_string": {"query": search_query.query, "default_field": "*"}}],
+                    "filter": [],
+                }
+            }
 
         if search_query.filters:
-            if 'bool' not in query_body:
-                existing_query = query_body.get("query", query_body)
-                query_body = {"bool": {"must": [existing_query] if existing_query != {"match_all": {}} else [], "filter": []}}
-            elif 'must' not in query_body.get('bool', {}):
-                query_body['bool']['must'] = []
-                query_body['bool']['filter'] = []
+            if "bool" not in query_body:
+                query_body = {"bool": {"must": [query_body], "filter": []}}
+            query_body["bool"].setdefault("must", [])
+            query_body["bool"].setdefault("filter", [])
 
             for key, value in search_query.filters.items():
-                query_body['bool']['filter'].append({"term": {key: value}})
+                query_body["bool"]["filter"].append({"term": {_keyword_field(key): value}})
 
         if search_query.time_range:
-            if search_query.time_range.endswith('h'):
-                gte = f"now-{search_query.time_range}"
-            elif search_query.time_range.endswith('d'):
-                gte = f"now-{search_query.time_range}"
-            else:
-                gte = f"now-{search_query.time_range}"
+            gte = f"now-{search_query.time_range}"
+            if "bool" not in query_body:
+                query_body = {"bool": {"must": [query_body], "filter": []}}
+            query_body["bool"].setdefault("filter", [])
+            query_body["bool"]["filter"].append({"range": {"timestamp": {"gte": gte}}})
 
-            if 'bool' in query_body:
-                query_body['bool']['filter'].append({"range": {"timestamp": {"gte": gte}}})
-            else:
-                query_body = {"bool": {"filter": [{"range": {"timestamp": {"gte": gte}}}]}}
-
-        response = await es_client.search(index=search_query.index or "soc_events", query=query_body, size=1000)
+        response = await es_client.search(
+            index=search_query.index or "soc_events",
+            query=query_body,
+            size=1000,
+        )
         results = []
         for hit in response['hits']['hits']:
             result = hit['_source']
@@ -85,11 +91,24 @@ async def analyze_ip(ip_address: str, request: Request, current_user: dict = Dep
     from fastapi import HTTPException
     es_client = request.app.state.es_client
     try:
-        total = await es_client.count(index="soc_events", query={"term": {"source_ip": ip_address}})
-        type_agg = await es_client.search(index="soc_events", size=0, query={"term": {"source_ip": ip_address}},
-            aggs={"event_types": {"terms": {"field": "event_type", "size": 20}}, "severity_dist": {"terms": {"field": "severity", "size": 10}}})
-        time_sort = await es_client.search(index="soc_events", size=1, query={"term": {"source_ip": ip_address}}, sort=[{"timestamp": {"order": "asc"}}])
-        time_sort_desc = await es_client.search(index="soc_events", size=1, query={"term": {"source_ip": ip_address}}, sort=[{"timestamp": {"order": "desc"}}])
+        ip_term = {"term": {_keyword_field("source_ip"): ip_address}}
+        total = await es_client.count(index="soc_events", query=ip_term)
+        type_agg = await es_client.search(
+            index="soc_events",
+            size=0,
+            query=ip_term,
+            aggs={
+                "event_types": {"terms": {"field": _keyword_field("event_type"), "size": 20}},
+                "severity_dist": {"terms": {"field": _keyword_field("severity"), "size": 10}},
+            },
+        )
+        time_sort = await es_client.search(index="soc_events", size=1, query=ip_term, sort=[{"timestamp": {"order": "asc"}}])
+        time_sort_desc = await es_client.search(
+            index="soc_events",
+            size=1,
+            query=ip_term,
+            sort=[{"timestamp": {"order": "desc"}}],
+        )
 
         geo_info = None
         if time_sort['hits']['hits']:
@@ -98,15 +117,17 @@ async def analyze_ip(ip_address: str, request: Request, current_user: dict = Dep
                 geo_info = {'country': first_event.get('geo_country'), 'city': first_event.get('geo_city'),
                     'latitude': first_event.get('geo_latitude'), 'longitude': first_event.get('geo_longitude'), 'asn': first_event.get('asn')}
 
-        honeypot_sessions = await es_client.count(index="honeypot_sessions", query={"term": {"source_ip": ip_address}})
-        commands_session = await es_client.search(index="honeypot_sessions", size=100, query={"term": {"source_ip": ip_address}})
+        honeypot_ip_term = {"term": {_keyword_field("source_ip"): ip_address}}
+        honeypot_sessions = await es_client.count(index="honeypot_sessions", query=honeypot_ip_term)
+        commands_session = await es_client.search(index="honeypot_sessions", size=100, query=honeypot_ip_term)
 
         commands = []
         for session in commands_session['hits']['hits']:
             cmds = session['_source'].get('commands_executed', [])
             if isinstance(cmds, str):
                 try: cmds = json.loads(cmds)
-                except: cmds = []
+                except Exception:
+                    cmds = []
             for cmd in cmds:
                 commands.append(cmd.get('command', '') if isinstance(cmd, dict) else cmd)
 
@@ -139,12 +160,18 @@ async def correlate_events(
     try:
         query = {"bool": {"filter": [{"range": {"timestamp": {"gte": f"now-{time_window}"}}}]}}
         if ip_address:
-            query['bool']['filter'].append({"term": {"source_ip": ip_address}})
+            query['bool']['filter'].append({"term": {_keyword_field("source_ip"): ip_address}})
 
-        response = await es_client.search(index="soc_events", query=query, size=0,
-            aggs={"correlated_ips": {"terms": {"field": "source_ip", "size": 50}},
-                  "correlated_events": {"terms": {"field": "event_type", "size": 20}},
-                  "timeline": {"date_histogram": {"field": "timestamp", "calendar_interval": "5m"}}})
+        response = await es_client.search(
+            index="soc_events",
+            query=query,
+            size=0,
+            aggs={
+                "correlated_ips": {"terms": {"field": _keyword_field("source_ip"), "size": 50}},
+                "correlated_events": {"terms": {"field": _keyword_field("event_type"), "size": 20}},
+                "timeline": {"date_histogram": {"field": "timestamp", "calendar_interval": "5m"}},
+            },
+        )
 
         return {
             "query_ip": ip_address, "time_window": time_window,

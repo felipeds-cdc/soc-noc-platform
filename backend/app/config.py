@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     ELASTICSEARCH_URL: str = "http://localhost:9200"
 
     # JWT Auth
-    SECRET_KEY: str = ""  # DEVE ser definido via variável de ambiente SECRET_KEY
+    SECRET_KEY: str = "CHANGE_ME_IN_ENV"  # Definir SECRET_KEY forte em producao
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_MINUTES: int = 60
     

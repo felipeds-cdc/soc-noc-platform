@@ -12,12 +12,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import get_settings, Settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifica se senha plain corresponde ao hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        return False
 
 
 def get_password_hash(password: str) -> str:
@@ -40,7 +43,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
-def decode_access_token(token: str, settings: Settings = None) -> dict:
+def decode_access_token(token: str, settings: Settings = None) -> Optional[dict]:
     """Decodifica token JWT."""
     if settings is None:
         settings = get_settings()
@@ -62,6 +65,9 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     
+    if credentials is None:
+        raise credentials_exception
+
     try:
         payload = decode_access_token(credentials.credentials, settings)
         if payload is None:

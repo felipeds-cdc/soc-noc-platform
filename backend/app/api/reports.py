@@ -69,7 +69,7 @@ async def generate_report(
         for bucket in aggs.get('by_country', {}).get('buckets', []):
             md_content += f"| {bucket['key']} | {bucket['doc_count']} |\n"
 
-        if report_data.include_recommend:
+        if report_data.include_recommendations:
             md_content += """
 ## Recomendações de Segurança
 
@@ -85,18 +85,23 @@ async def generate_report(
 """
 
         content = md_content
-        if report_data.format == "html":
+        if report_data.format.value == "html":
             content = markdown.markdown(md_content, extensions=['tables', 'fenced_code'])
             content = f"""<!DOCTYPE html><html><head><title>Relatório SOC/NOC</title>
 <style>body{{font-family:Arial,sans-serif;margin:40px;line-height:1.6}}h1{{color:#2c3e50;border-bottom:3px solid #3498db;padding-bottom:10px}}
 table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{border:1px solid #ddd;padding:12px;text-align:left}}
 th{{background-color:#3498db;color:white}}tr:nth-child(even){{background-color:#f2f2f2}}</style>
 </head><body>{content}</body></html>"""
-        elif report_data.format == "pdf":
+        elif report_data.format.value == "pdf":
             content = f"<h1>Para gerar PDF, instale weasyprint</h1>{markdown.markdown(md_content, extensions=['tables'])}"
 
-        return ReportResponse(report_id=str(uuid.uuid4()), report_type=report_data.report_type,
-            format=report_data.format, generated_at=datetime.utcnow(), content=content)
+        return ReportResponse(
+            report_id=str(uuid.uuid4()),
+            report_type=report_data.report_type.value,
+            format=report_data.format.value,
+            generated_at=datetime.utcnow(),
+            content=content,
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar relatório: {str(e)}")

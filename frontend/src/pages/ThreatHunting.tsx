@@ -1,38 +1,52 @@
 import { useState } from 'react'
-import api from '../services/api'
+import toast from 'react-hot-toast'
+import { analyzeIpAddress, searchThreats, type IpAnalysis, type ThreatSearchResponse } from '../services/threatHuntingService'
+import { getErrorMessage } from '../services/error'
 
 export default function ThreatHunting() {
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<any>(null)
+  const [results, setResults] = useState<ThreatSearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
-  const [ipAnalysis, setIpAnalysis] = useState<any>(null)
+  const [ipAnalysis, setIpAnalysis] = useState<IpAnalysis | null>(null)
   const [searchIp, setSearchIp] = useState('')
+  const [analyzingIp, setAnalyzingIp] = useState(false)
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
+    const safeQuery = query.trim()
+    if (!safeQuery) {
+      toast.error('Informe uma query para buscar.')
+      return
+    }
+
     setLoading(true)
-    
+
     try {
-      const response = await api.post('/api/threat-hunting/search', {
-        query,
-        time_range: '24h'
-      })
-      setResults(response.data)
-    } catch (error) {
-      console.error('Erro na busca:', error)
+      const response = await searchThreats(safeQuery)
+      setResults(response)
+    } catch (requestError) {
+      toast.error(getErrorMessage(requestError, 'Erro ao executar busca de threat hunting.'))
     } finally {
       setLoading(false)
     }
   }
 
   const handleIpAnalysis = async () => {
-    if (!searchIp) return
-    
+    const ip = searchIp.trim()
+    if (!ip) {
+      toast.error('Informe um IP para análise.')
+      return
+    }
+
+    setAnalyzingIp(true)
+
     try {
-      const response = await api.get(`/api/threat-hunting/ip-analysis/${searchIp}`)
-      setIpAnalysis(response.data)
-    } catch (error) {
-      console.error('Erro na análise de IP:', error)
+      const response = await analyzeIpAddress(ip)
+      setIpAnalysis(response)
+    } catch (requestError) {
+      toast.error(getErrorMessage(requestError, 'Erro ao analisar IP.'))
+    } finally {
+      setAnalyzingIp(false)
     }
   }
 
@@ -42,15 +56,15 @@ export default function ThreatHunting() {
         <h2>Threat Hunting</h2>
       </div>
 
-      {/* Query Search */}
       <div className="card">
         <div className="card-header">
           <h3>Busca Customizada</h3>
         </div>
         <form onSubmit={handleSearch}>
           <div className="form-group">
-            <label>Query (Elasticsearch Query String ou Lucene)</label>
+            <label htmlFor="threat-query">Query (Elasticsearch Query String ou Lucene)</label>
             <textarea
+              id="threat-query"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder='severity:high AND source_ip:"10.0.0.*"'
@@ -58,7 +72,7 @@ export default function ThreatHunting() {
               style={{ fontFamily: 'monospace' }}
             />
           </div>
-          <button type="submit" className="btn btn-primary" disabled={loading || !query}>
+          <button type="submit" className="btn btn-primary" disabled={loading || !query.trim()}>
             {loading ? 'Buscando...' : 'Buscar'}
           </button>
         </form>
@@ -66,8 +80,7 @@ export default function ThreatHunting() {
         {results && (
           <div style={{ marginTop: '20px' }}>
             <p>
-              <strong>{results.total_hits}</strong> resultados encontrados 
-              em {results.execution_time_ms.toFixed(0)}ms
+              <strong>{results.total_hits}</strong> resultados encontrados em {results.execution_time_ms.toFixed(0)}ms
             </p>
             <div style={{ maxHeight: '400px', overflow: 'auto', marginTop: '10px' }}>
               <pre style={{ background: 'var(--bg-secondary)', padding: '15px', borderRadius: '8px', fontSize: '0.85rem' }}>
@@ -78,7 +91,6 @@ export default function ThreatHunting() {
         )}
       </div>
 
-      {/* IP Analysis */}
       <div className="card">
         <div className="card-header">
           <h3>Análise de IP</h3>
@@ -91,8 +103,8 @@ export default function ThreatHunting() {
             placeholder="192.168.1.100"
             style={{ flex: 1 }}
           />
-          <button className="btn btn-primary" onClick={handleIpAnalysis}>
-            Analisar
+          <button className="btn btn-primary" onClick={handleIpAnalysis} disabled={analyzingIp}>
+            {analyzingIp ? 'Analisando...' : 'Analisar'}
           </button>
         </div>
 
@@ -109,9 +121,7 @@ export default function ThreatHunting() {
               </div>
               <div className="kpi-card">
                 <div className="kpi-label">País</div>
-                <div className="kpi-value" style={{ fontSize: '1.5rem' }}>
-                  {ipAnalysis.geo_info?.country || 'N/A'}
-                </div>
+                <div className="kpi-value" style={{ fontSize: '1.5rem' }}>{ipAnalysis.geo_info?.country || 'N/A'}</div>
               </div>
             </div>
 
@@ -126,7 +136,7 @@ export default function ThreatHunting() {
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(ipAnalysis.event_types).map(([type, count]: [string, any]) => (
+                    {Object.entries(ipAnalysis.event_types).map(([type, count]) => (
                       <tr key={type}>
                         <td>{type}</td>
                         <td>{count}</td>
@@ -140,10 +150,18 @@ export default function ThreatHunting() {
             {ipAnalysis.commands_executed && ipAnalysis.commands_executed.length > 0 && (
               <div>
                 <h4>Comandos Executados ({ipAnalysis.commands_executed.length})</h4>
-                <div style={{ background: 'var(--bg-secondary)', padding: '15px', borderRadius: '8px', maxHeight: '300px', overflow: 'auto' }}>
-                  {ipAnalysis.commands_executed.map((cmd: string, idx: number) => (
-                    <div key={idx} style={{ fontFamily: 'monospace', marginBottom: '5px' }}>
-                      {cmd}
+                <div
+                  style={{
+                    background: 'var(--bg-secondary)',
+                    padding: '15px',
+                    borderRadius: '8px',
+                    maxHeight: '300px',
+                    overflow: 'auto',
+                  }}
+                >
+                  {ipAnalysis.commands_executed.map((command, index) => (
+                    <div key={`${command}-${index}`} style={{ fontFamily: 'monospace', marginBottom: '5px' }}>
+                      {command}
                     </div>
                   ))}
                 </div>

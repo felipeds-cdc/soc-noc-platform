@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from typing import Optional
 from datetime import datetime
 
-from app.models import EventResponse, EventUpdate, EventQuery, EventListResponse
+from app.models import EventListResponse, EventResponse, EventStatusEnum, EventUpdate, SeverityEnum
 from app.security import get_current_user
 from app.services import EventService
 
@@ -16,9 +16,9 @@ router = APIRouter(prefix="/api/events", tags=["Events"])
 async def list_events(
     request: Request,
     event_type: Optional[str] = None,
-    severity: Optional[str] = None,
+    severity: Optional[SeverityEnum] = None,
     source_ip: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[EventStatusEnum] = None,
     mitre_technique_id: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
@@ -28,8 +28,11 @@ async def list_events(
 ):
     """Lista eventos com filtros."""
     filters = {
-        'event_type': event_type, 'severity': severity, 'source_ip': source_ip,
-        'status': status, 'mitre_technique_id': mitre_technique_id,
+        'event_type': event_type,
+        'severity': severity.value if severity else None,
+        'source_ip': source_ip,
+        'status': status.value if status else None,
+        'mitre_technique_id': mitre_technique_id,
         'start_time': start_time, 'end_time': end_time,
     }
     return await EventService(request.app.state.pg_pool, request.app.state.es_client).query_events(filters, page, page_size)
@@ -54,7 +57,10 @@ async def update_event(
 ):
     """Atualiza status do evento."""
     event = await EventService(request.app.state.pg_pool, request.app.state.es_client).update_event_status(
-        event_id, update_data.status, current_user['user_id'], update_data.resolution_notes
+        event_id,
+        update_data.status.value if update_data.status else None,
+        current_user['user_id'],
+        update_data.resolution_notes,
     )
     if not event:
         from fastapi import HTTPException

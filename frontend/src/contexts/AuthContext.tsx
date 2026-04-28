@@ -1,56 +1,87 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import api from '../services/api'
-
-interface User {
-  user_id: string
-  username: string
-  role: string
-}
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { loginRequest, logoutRequest, meRequest } from '../services/authService'
+import { getStoredUser, getToken, type AuthUser } from '../services/authStorage'
 
 interface AuthContextType {
-  user: User | null
+  user: AuthUser | null
   login: (username: string, password: string) => Promise<void>
   logout: () => void
   loading: boolean
+  isAuthenticated: boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-    
-    if (token && userData) {
-      setUser(JSON.parse(userData))
+    let mounted = true
+
+    const bootstrapAuth = async () => {
+      try {
+        const token = getToken()
+        const storedUser = getStoredUser()
+
+        if (!token) {
+          if (mounted) setUser(null)
+          return
+        }
+
+        if (storedUser && mounted) {
+          setUser(storedUser)
+        }
+
+        const refreshedUser = await meRequest()
+        if (mounted && refreshedUser) {
+          setUser(refreshedUser)
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false)
+        }
+      }
     }
-    
-    setLoading(false)
+
+    bootstrapAuth()
+
+    const unauthorizedListener = () => {
+      if (mounted) {
+        setUser(null)
+      }
+    }
+
+    window.addEventListener('auth:unauthorized', unauthorizedListener)
+
+    return () => {
+      mounted = false
+      window.removeEventListener('auth:unauthorized', unauthorizedListener)
+    }
   }, [])
 
-  const login = async (username: string, password: string) => {
-    const response = await api.post('/api/auth/login', { username, password })
-    const { access_token, ...userData } = response.data
-    
-    localStorage.setItem('token', access_token)
-    localStorage.setItem('user', JSON.stringify(userData))
-    setUser(userData)
-  }
+  const login = useCallback(async (username: string, password: string) => {
+    const authUser = await loginRequest(username, password)
+    setUser(authUser)
+  }, [])
 
-  const logout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+  const logout = useCallback(() => {
+    logoutRequest()
     setUser(null)
-  }
+  }, [])
 
-  return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({
+      user,
+      login,
+      logout,
+      loading,
+      isAuthenticated: Boolean(user),
+    }),
+    [login, loading, logout, user],
   )
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

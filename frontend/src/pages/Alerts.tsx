@@ -1,33 +1,59 @@
-import { useState, useEffect } from 'react'
-import api from '../services/api'
+import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
+import { ErrorState } from '../components/PageState'
+import { fetchAlerts, updateAlertStatus, type AlertItem } from '../services/alertsService'
+import { getErrorMessage } from '../services/error'
 
 export default function Alerts() {
-  const [alerts, setAlerts] = useState<any[]>([])
+  const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [filterStatus, setFilterStatus] = useState('')
+  const [reloadNonce, setReloadNonce] = useState(0)
 
   useEffect(() => {
-    loadAlerts()
-  }, [filterStatus])
+    let mounted = true
 
-  const loadAlerts = async () => {
-    try {
-      const params = filterStatus ? `?status=${filterStatus}` : ''
-      const response = await api.get(`/api/alerts${params}`)
-      setAlerts(response.data.alerts || [])
-    } catch (error) {
-      console.error('Erro ao carregar alertas:', error)
-    } finally {
-      setLoading(false)
+    const load = async () => {
+      try {
+        if (mounted) {
+          setError(null)
+        }
+
+        const alertData = await fetchAlerts(filterStatus)
+        if (!mounted) {
+          return
+        }
+
+        setAlerts(alertData)
+      } catch (requestError) {
+        if (!mounted) {
+          return
+        }
+
+        const message = getErrorMessage(requestError, 'Não foi possível carregar os alertas.')
+        setError(message)
+        toast.error(message)
+      } finally {
+        if (mounted) {
+          setLoading(false)
+        }
+      }
     }
-  }
 
-  const updateAlertStatus = async (alertId: string, status: string) => {
+    load()
+    return () => {
+      mounted = false
+    }
+  }, [filterStatus, reloadNonce])
+
+  const handleUpdateAlertStatus = async (alertId: string, status: string) => {
     try {
-      await api.patch(`/api/alerts/${alertId}`, { status })
-      loadAlerts()
-    } catch (error) {
-      console.error('Erro ao atualizar alerta:', error)
+      await updateAlertStatus(alertId, status)
+      toast.success('Status do alerta atualizado com sucesso.')
+      setAlerts((previous) => previous.map((item) => (item.id === alertId ? { ...item, status } : item)))
+    } catch (requestError) {
+      toast.error(getErrorMessage(requestError, 'Não foi possível atualizar o alerta.'))
     }
   }
 
@@ -36,7 +62,7 @@ export default function Alerts() {
       low: 'var(--accent-green)',
       medium: 'var(--accent-yellow)',
       high: 'var(--accent-red)',
-      critical: '#ff6b6b'
+      critical: '#ff6b6b',
     }
     return colors[severity] || 'var(--text-secondary)'
   }
@@ -45,16 +71,28 @@ export default function Alerts() {
     return <div className="loading"><div className="spinner"></div></div>
   }
 
+  if (error) {
+    return (
+      <ErrorState
+        title="Falha ao carregar alertas"
+        message={error}
+        action={{
+          label: 'Recarregar',
+          onClick: () => {
+            setLoading(true)
+            setReloadNonce((current) => current + 1)
+          },
+        }}
+      />
+    )
+  }
+
   return (
     <div>
       <div className="header">
         <h2>Alertas</h2>
         <div className="header-actions">
-          <select 
-            value={filterStatus} 
-            onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ width: 'auto' }}
-          >
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ width: 'auto' }}>
             <option value="">Todos</option>
             <option value="triggered">Triggered</option>
             <option value="acknowledged">Acknowledged</option>
@@ -77,44 +115,45 @@ export default function Alerts() {
               </tr>
             </thead>
             <tbody>
-              {alerts.map((alert: any) => (
-                <tr key={alert.id}>
-                  <td>{new Date(alert.created_at).toLocaleString('pt-BR')}</td>
+              {alerts.map((alert, index) => (
+                <tr key={alert.id || `${alert.created_at || 'unknown'}-${index}`}>
+                  <td>{alert.created_at ? new Date(alert.created_at).toLocaleString('pt-BR') : 'N/A'}</td>
                   <td>
-                    <strong>{alert.rule_name}</strong>
+                    <strong>{alert.rule_name || 'N/A'}</strong>
                     <br />
-                    <small style={{ color: 'var(--text-secondary)' }}>{alert.rule_id}</small>
+                    <small style={{ color: 'var(--text-secondary)' }}>{alert.rule_id || 'N/A'}</small>
                   </td>
                   <td>
-                    <span 
+                    <span
                       className="badge"
-                      style={{ 
-                        background: `${getSeverityColor(alert.severity)}20`,
-                        color: getSeverityColor(alert.severity)
+                      style={{
+                        background: `${getSeverityColor(alert.severity || 'low')}20`,
+                        color: getSeverityColor(alert.severity || 'low'),
                       }}
                     >
-                      {alert.severity}
+                      {alert.severity || 'N/A'}
                     </span>
                   </td>
                   <td>
                     <span className={`badge badge-${alert.status === 'triggered' ? 'critical' : 'low'}`}>
-                      {alert.status}
+                      {alert.status || 'unknown'}
                     </span>
                   </td>
                   <td>{alert.description || '-'}</td>
                   <td>
-                    {alert.status === 'triggered' && (
-                      <button 
+                    {alert.status === 'triggered' ? (
+                      <button
                         className="btn btn-primary"
                         style={{ padding: '5px 10px', fontSize: '0.85rem' }}
-                        onClick={() => updateAlertStatus(alert.id, 'acknowledged')}
+                        onClick={() => handleUpdateAlertStatus(alert.id, 'acknowledged')}
                       >
                         Acknowledge
                       </button>
-                    )}
+                    ) : null}
                   </td>
                 </tr>
               ))}
+
               {alerts.length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '20px' }}>

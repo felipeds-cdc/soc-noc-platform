@@ -1,74 +1,145 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
 } from 'recharts'
 import { FiActivity, FiAlertTriangle, FiShield, FiTerminal, FiGlobe, FiUsers } from 'react-icons/fi'
-import api from '../services/api'
+import toast from 'react-hot-toast'
+import {
+  fetchDashboardKpis,
+  fetchDashboardTimeSeries,
+  fetchDashboardTopItems,
+  fetchHoneypotSessions,
+  type DashboardKpis,
+  type DashboardTimeSeries,
+  type DashboardTopItems,
+  type HoneypotSession,
+} from '../services/dashboardService'
+import { getErrorMessage } from '../services/error'
+import { ErrorState } from '../components/PageState'
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
 
-export default function Dashboard() {
-  const [kpis, setKpis] = useState<any>(null)
-  const [timeSeries, setTimeSeries] = useState<any>({ events: [], alerts: [] })
-  const [topItems, setTopItems] = useState<any>({})
-  const [honeypotSessions, setHoneypotSessions] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+const INITIAL_KPIS: DashboardKpis = {
+  total_events_24h: 0,
+  critical_alerts: 0,
+  high_alerts: 0,
+  honeypot_sessions_24h: 0,
+  unique_source_ips: 0,
+  brute_force_attempts: 0,
+}
 
-  useEffect(() => {
-    loadData()
-    const interval = setInterval(loadData, 30000)
-    return () => clearInterval(interval)
-  }, [])
+const INITIAL_TIME_SERIES: DashboardTimeSeries = {
+  events: [],
+  alerts: [],
+}
 
-  const loadData = async () => {
+const INITIAL_TOP_ITEMS: DashboardTopItems = {
+  top_countries: [],
+  top_source_ips: [],
+}
+
+function getSessionField(session: HoneypotSession, field: 'source_ip' | 'username' | 'password') {
+  if (session?.[field]) {
+    return session[field]
+  }
+
+  if (session?.data && typeof session.data === 'string') {
     try {
-      const [kpisRes, timeRes, topRes, honeypotRes] = await Promise.all([
-        api.get('/api/dashboard/kpis'),
-        api.get('/api/dashboard/time-series'),
-        api.get('/api/dashboard/top-items'),
-        api.get('/api/dashboard/honeypot/sessions'),
-      ])
-
-      console.log("HONEYPOT RAW:", honeypotRes.data)
-
-      // 🔥 Trata Elasticsearch ou API padrão
-      const rawSessions = honeypotRes.data.sessions || honeypotRes.data || []
-
-      const parsedSessions = rawSessions.map((s: any) => s._source || s)
-
-      setKpis(kpisRes.data || {})
-      setTimeSeries(timeRes.data || { events: [], alerts: [] })
-      setTopItems(topRes.data || {})
-      setHoneypotSessions(parsedSessions)
-
-    } catch (error) {
-      console.error('Erro ao carregar dados:', error)
-    } finally {
-      setLoading(false)
+      const parsed = JSON.parse(session.data)
+      return parsed?.[field]
+    } catch {
+      return undefined
     }
   }
 
-  // 🔥 Função segura para acessar campos (fallback em data JSON)
-  const getField = (obj: any, field: string) => {
-    if (obj?.[field]) return obj[field]
+  if (session?.data && typeof session.data === 'object') {
+    return (session.data as Record<string, unknown>)?.[field]
+  }
 
-    if (obj?.data) {
-      try {
-        const parsed = typeof obj.data === 'string'
-          ? JSON.parse(obj.data)
-          : obj.data
-        return parsed?.[field]
-      } catch {
-        return undefined
-      }
+  return undefined
+}
+
+export default function Dashboard() {
+  const [kpis, setKpis] = useState<DashboardKpis>(INITIAL_KPIS)
+  const [timeSeries, setTimeSeries] = useState<DashboardTimeSeries>(INITIAL_TIME_SERIES)
+  const [topItems, setTopItems] = useState<DashboardTopItems>(INITIAL_TOP_ITEMS)
+  const [honeypotSessions, setHoneypotSessions] = useState<HoneypotSession[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+
+    const run = async () => {
+      await loadData(mounted)
     }
 
-    return undefined
+    run()
+    const interval = window.setInterval(run, 30000)
+
+    return () => {
+      mounted = false
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  const loadData = async (mounted = true) => {
+    try {
+      if (mounted) {
+        setError(null)
+      }
+
+      const [kpisData, timeSeriesData, topItemsData, sessionsData] = await Promise.all([
+        fetchDashboardKpis(),
+        fetchDashboardTimeSeries(),
+        fetchDashboardTopItems(),
+        fetchHoneypotSessions(),
+      ])
+
+      if (!mounted) {
+        return
+      }
+
+      setKpis(kpisData)
+      setTimeSeries(timeSeriesData)
+      setTopItems(topItemsData)
+      setHoneypotSessions(sessionsData)
+    } catch (requestError) {
+      if (!mounted) {
+        return
+      }
+
+      const message = getErrorMessage(requestError, 'Não foi possível carregar o dashboard.')
+      setError(message)
+      toast.error(message)
+    } finally {
+      if (mounted) {
+        setLoading(false)
+      }
+    }
   }
 
   if (loading) {
     return <div className="loading"><div className="spinner"></div></div>
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Falha ao carregar dashboard"
+        message={error}
+        action={{ label: 'Tentar novamente', onClick: () => loadData(true) }}
+      />
+    )
   }
 
   return (
@@ -76,58 +147,50 @@ export default function Dashboard() {
       <div className="header">
         <h2>Dashboard</h2>
         <div className="header-actions">
-          <span className="user-badge">
-            Última atualização: {new Date().toLocaleTimeString('pt-BR')}
-          </span>
+          <span className="user-badge">Última atualização: {new Date().toLocaleTimeString('pt-BR')}</span>
         </div>
       </div>
 
-      {/* KPIs */}
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label"><FiActivity /> Total de Eventos (24h)</div>
-          <div className="kpi-value">{kpis?.total_events_24h || 0}</div>
+          <div className="kpi-value">{kpis.total_events_24h}</div>
         </div>
 
         <div className="kpi-card critical">
           <div className="kpi-label"><FiAlertTriangle /> Alertas Críticos</div>
-          <div className="kpi-value" style={{ color: 'var(--accent-red)' }}>
-            {kpis?.critical_alerts || 0}
-          </div>
+          <div className="kpi-value" style={{ color: 'var(--accent-red)' }}>{kpis.critical_alerts}</div>
         </div>
 
         <div className="kpi-card warning">
           <div className="kpi-label"><FiShield /> Alertas Altos</div>
-          <div className="kpi-value" style={{ color: 'var(--accent-yellow)' }}>
-            {kpis?.high_alerts || 0}
-          </div>
+          <div className="kpi-value" style={{ color: 'var(--accent-yellow)' }}>{kpis.high_alerts}</div>
         </div>
 
         <div className="kpi-card success">
           <div className="kpi-label"><FiTerminal /> Sessões Honeypot</div>
           <div className="kpi-value" style={{ color: 'var(--accent-green)' }}>
-            {kpis?.honeypot_sessions_24h || honeypotSessions.length}
+            {kpis.honeypot_sessions_24h || honeypotSessions.length}
           </div>
         </div>
 
         <div className="kpi-card">
           <div className="kpi-label"><FiGlobe /> IPs Únicos</div>
-          <div className="kpi-value">{kpis?.unique_source_ips || 0}</div>
+          <div className="kpi-value">{kpis.unique_source_ips}</div>
         </div>
 
         <div className="kpi-card warning">
           <div className="kpi-label"><FiUsers /> Tentativas Brute Force</div>
-          <div className="kpi-value">{kpis?.brute_force_attempts || 0}</div>
+          <div className="kpi-value">{kpis.brute_force_attempts}</div>
         </div>
       </div>
 
-      {/* Charts */}
       <div className="grid-2">
         <div className="card">
           <div className="card-header"><h3>Timeline de Eventos</h3></div>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={timeSeries.events || []}>
+              <LineChart data={timeSeries.events}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="timestamp" />
                 <YAxis />
@@ -143,9 +206,16 @@ export default function Dashboard() {
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={topItems.top_countries || []} dataKey="count" cx="50%" cy="50%" outerRadius={80}>
-                  {(topItems.top_countries || []).map((_: any, i: number) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                <Pie
+                  data={topItems.top_countries}
+                  dataKey="count"
+                  nameKey="label"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                >
+                  {topItems.top_countries.map((country, index) => (
+                    <Cell key={`${country.label || country.key || 'country'}-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip />
@@ -155,7 +225,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Honeypot Table */}
       <div className="card">
         <div className="card-header">
           <h3>Últimas Sessões do Honeypot</h3>
@@ -173,20 +242,15 @@ export default function Dashboard() {
                 <th>Início</th>
               </tr>
             </thead>
-
             <tbody>
-              {honeypotSessions.slice(0, 10).map((s: any, i: number) => (
-                <tr key={s.session_id || i}>
-                  <td>{getField(s, 'source_ip') || 'N/A'}</td>
-                  <td><code>{getField(s, 'username') || 'N/A'}</code></td>
-                  <td><code>{getField(s, 'password') || 'N/A'}</code></td>
-                  <td>{s.geo_country || 'N/A'}</td>
-                  <td>{s.session_duration ? `${s.session_duration}s` : '0s'}</td>
-                  <td>
-                    {s.started_at
-                      ? new Date(s.started_at).toLocaleString('pt-BR')
-                      : 'N/A'}
-                  </td>
+              {honeypotSessions.slice(0, 10).map((session, index) => (
+                <tr key={session.session_id || `${session.started_at || 'unknown'}-${index}`}>
+                  <td>{String(getSessionField(session, 'source_ip') || 'N/A')}</td>
+                  <td><code>{String(getSessionField(session, 'username') || 'N/A')}</code></td>
+                  <td><code>{String(getSessionField(session, 'password') || 'N/A')}</code></td>
+                  <td>{session.geo_country || 'N/A'}</td>
+                  <td>{session.session_duration ? `${session.session_duration}s` : '0s'}</td>
+                  <td>{session.started_at ? new Date(session.started_at).toLocaleString('pt-BR') : 'N/A'}</td>
                 </tr>
               ))}
 
@@ -198,7 +262,6 @@ export default function Dashboard() {
                 </tr>
               )}
             </tbody>
-
           </table>
         </div>
       </div>

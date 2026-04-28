@@ -2,7 +2,7 @@
 Modelos Pydantic para request/response
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -34,6 +34,19 @@ class UserRoleEnum(str, Enum):
     VIEWER = "viewer"
 
 
+class ReportTypeEnum(str, Enum):
+    EXECUTIVE = "executive"
+    INCIDENTS = "incidents"
+    HONEYPOT = "honeypot"
+    IOC = "ioc"
+
+
+class ReportFormatEnum(str, Enum):
+    MARKDOWN = "markdown"
+    HTML = "html"
+    PDF = "pdf"
+
+
 # === Auth Models ===
 
 class LoginRequest(BaseModel):
@@ -46,7 +59,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user_id: str
     username: str
-    role: str
+    role: UserRoleEnum
 
 
 class UserCreate(BaseModel):
@@ -60,7 +73,7 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: Optional[str]
-    role: str
+    role: UserRoleEnum
     is_active: bool
     created_at: datetime
 
@@ -176,7 +189,7 @@ class HoneypotSessionResponse(BaseModel):
     username: str
     password: str
     login_success: bool
-    commands_executed: List[dict] = []
+    commands_executed: List[dict] = Field(default_factory=list)
     session_duration: Optional[int] = None
     geo_country: Optional[str] = None
     geo_city: Optional[str] = None
@@ -220,12 +233,12 @@ class IPAnalysisResponse(BaseModel):
     total_events: int
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
-    event_types: dict = {}
-    severity_distribution: dict = {}
+    event_types: Dict[str, int] = Field(default_factory=dict)
+    severity_distribution: Dict[str, int] = Field(default_factory=dict)
     geo_info: Optional[dict] = None
     reputation: Optional[dict] = None
     associated_sessions: int = 0
-    commands_executed: List[str] = []
+    commands_executed: List[str] = Field(default_factory=list)
 
 
 # === Dashboard Models ===
@@ -266,8 +279,8 @@ class DashboardTopItems(BaseModel):
 # === Report Models ===
 
 class ReportRequest(BaseModel):
-    report_type: str = Field(..., description="executive, incidents, honeypot, ioc")
-    format: str = Field(default="markdown", description="markdown, html, pdf")
+    report_type: ReportTypeEnum = Field(..., description="executive, incidents, honeypot, ioc")
+    format: ReportFormatEnum = Field(default=ReportFormatEnum.MARKDOWN, description="markdown, html, pdf")
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     include_iocs: bool = True
@@ -292,7 +305,7 @@ class IOCCreate(BaseModel):
     confidence: int = Field(..., ge=0, le=100)
     source: Optional[str] = None
     description: Optional[str] = None
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list)
 
 
 class IOCResponse(BaseModel):

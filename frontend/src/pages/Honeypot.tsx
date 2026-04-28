@@ -1,61 +1,97 @@
-import { useState, useEffect } from 'react'
-import api from '../services/api'
+import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
+import { ErrorState } from '../components/PageState'
+import {
+  fetchHoneypotCredentials,
+  fetchHoneypotSessions,
+  type HoneypotSession,
+} from '../services/dashboardService'
+import { getErrorMessage } from '../services/error'
+
+function getField(session: HoneypotSession, field: 'source_ip' | 'username' | 'password') {
+  if (session?.[field]) {
+    return session[field]
+  }
+
+  if (session?.data && typeof session.data === 'string') {
+    try {
+      const parsed = JSON.parse(session.data)
+      return parsed?.[field]
+    } catch {
+      return undefined
+    }
+  }
+
+  if (session?.data && typeof session.data === 'object') {
+    return (session.data as Record<string, unknown>)?.[field]
+  }
+
+  return undefined
+}
 
 export default function Honeypot() {
-  const [sessions, setSessions] = useState<any[]>([])
-  const [credentials, setCredentials] = useState<any[]>([])
+  const [sessions, setSessions] = useState<HoneypotSession[]>([])
+  const [credentials, setCredentials] = useState<Array<{ username: string; password: string; count: number; source_ips: string[] }>>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'sessions' | 'credentials'>('sessions')
 
   useEffect(() => {
-    loadData()
-  }, [])
+    let mounted = true
 
-  const loadData = async () => {
-    try {
-      const [sessionsRes, credsRes] = await Promise.all([
-        api.get('/api/dashboard/honeypot/sessions'),
-        api.get('/api/dashboard/honeypot/credentials'),
-      ])
-
-      console.log("RAW SESSIONS:", sessionsRes.data)
-
-      // 🔥 Trata diferentes formatos de resposta (API ou Elasticsearch)
-      const rawSessions = sessionsRes.data.sessions || sessionsRes.data || []
-
-      const parsedSessions = rawSessions.map((s: any) => s._source || s)
-
-      setSessions(parsedSessions)
-      setCredentials(credsRes.data || [])
-
-    } catch (error) {
-      console.error('Erro ao carregar dados do honeypot:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // 🔥 Função segura para acessar campos (inclusive dentro de "data")
-  const getField = (obj: any, field: string) => {
-    if (obj?.[field]) return obj[field]
-
-    if (obj?.data) {
+    const load = async () => {
       try {
-        const parsed = typeof obj.data === 'string'
-          ? JSON.parse(obj.data)
-          : obj.data
+        if (mounted) {
+          setError(null)
+        }
 
-        return parsed?.[field]
-      } catch {
-        return undefined
+        const [sessionsData, credentialsData] = await Promise.all([
+          fetchHoneypotSessions(),
+          fetchHoneypotCredentials(),
+        ])
+
+        if (!mounted) {
+          return
+        }
+
+        setSessions(sessionsData)
+        setCredentials(credentialsData)
+      } catch (requestError) {
+        if (!mounted) {
+          return
+        }
+
+        const message = getErrorMessage(requestError, 'Não foi possível carregar dados do honeypot.')
+        setError(message)
+        toast.error(message)
+      } finally {
+        if (mounted) {
+          setLoading(false)
+        }
       }
     }
 
-    return undefined
-  }
+    load()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   if (loading) {
     return <div className="loading"><div className="spinner"></div></div>
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Falha ao carregar honeypot"
+        message={error}
+        action={{
+          label: 'Recarregar',
+          onClick: () => window.location.reload(),
+        }}
+      />
+    )
   }
 
   return (
@@ -65,16 +101,12 @@ export default function Honeypot() {
       </div>
 
       <div className="card">
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-          <button 
-            className={`btn ${activeTab === 'sessions' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('sessions')}
-          >
+          <button className={`btn ${activeTab === 'sessions' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setActiveTab('sessions')}>
             Sessões
           </button>
 
-          <button 
+          <button
             className={`btn ${activeTab === 'credentials' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setActiveTab('credentials')}
           >
@@ -82,7 +114,6 @@ export default function Honeypot() {
           </button>
         </div>
 
-        {/* SESSIONS */}
         {activeTab === 'sessions' && (
           <div className="table-container">
             <table>
@@ -99,45 +130,21 @@ export default function Honeypot() {
                 </tr>
               </thead>
               <tbody>
-                {sessions.map((session: any) => (
-                  <tr key={session.session_id || Math.random()}>
+                {sessions.map((session, index) => (
+                  <tr key={session.session_id || `${session.started_at || 'unknown'}-${index}`}>
                     <td>
                       <code style={{ fontSize: '0.85rem' }}>
-                        {session.session_id 
-                          ? session.session_id.substring(0, 8) + '...' 
-                          : 'N/A'}
+                        {session.session_id ? `${session.session_id.substring(0, 8)}...` : 'N/A'}
                       </code>
                     </td>
 
-                    <td>
-                      <code>{getField(session, 'source_ip') || 'N/A'}</code>
-                    </td>
-
-                    <td>
-                      <code>{getField(session, 'username') || 'N/A'}</code>
-                    </td>
-
-                    <td>
-                      <code>{getField(session, 'password') || 'N/A'}</code>
-                    </td>
-
+                    <td><code>{String(getField(session, 'source_ip') || 'N/A')}</code></td>
+                    <td><code>{String(getField(session, 'username') || 'N/A')}</code></td>
+                    <td><code>{String(getField(session, 'password') || 'N/A')}</code></td>
                     <td>{session.geo_country || 'N/A'}</td>
-
-                    <td>
-                      {session.commands_executed?.length || 0}
-                    </td>
-
-                    <td>
-                      {session.session_duration 
-                        ? `${session.session_duration}s` 
-                        : '0s'}
-                    </td>
-
-                    <td>
-                      {session.started_at 
-                        ? new Date(session.started_at).toLocaleString('pt-BR')
-                        : 'N/A'}
-                    </td>
+                    <td>{Array.isArray((session as any).commands_executed) ? (session as any).commands_executed.length : 0}</td>
+                    <td>{session.session_duration ? `${session.session_duration}s` : '0s'}</td>
+                    <td>{session.started_at ? new Date(session.started_at).toLocaleString('pt-BR') : 'N/A'}</td>
                   </tr>
                 ))}
 
@@ -153,7 +160,6 @@ export default function Honeypot() {
           </div>
         )}
 
-        {/* CREDENTIALS */}
         {activeTab === 'credentials' && (
           <div className="table-container">
             <table>
@@ -166,12 +172,12 @@ export default function Honeypot() {
                 </tr>
               </thead>
               <tbody>
-                {credentials.map((cred: any, idx: number) => (
-                  <tr key={idx}>
-                    <td><code>{cred.username}</code></td>
-                    <td><code>{cred.password}</code></td>
-                    <td>{cred.count}</td>
-                    <td>{cred.source_ips?.join(', ') || 'N/A'}</td>
+                {credentials.map((credential, index) => (
+                  <tr key={`${credential.username}-${credential.password}-${index}`}>
+                    <td><code>{credential.username || 'N/A'}</code></td>
+                    <td><code>{credential.password || 'N/A'}</code></td>
+                    <td>{credential.count}</td>
+                    <td>{credential.source_ips.join(', ') || 'N/A'}</td>
                   </tr>
                 ))}
 
@@ -186,7 +192,6 @@ export default function Honeypot() {
             </table>
           </div>
         )}
-
       </div>
     </div>
   )

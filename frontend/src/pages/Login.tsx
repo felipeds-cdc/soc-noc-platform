@@ -1,28 +1,35 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { FiShield } from 'react-icons/fi'
+import { useAuth } from '../contexts/AuthContext'
+import { useApiRequest } from '../hooks/useApiRequest'
+import { getErrorMessage } from '../services/error'
 
 export default function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
+  const { loading, run } = useApiRequest()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
-    
+
+    const safeUsername = username.trim()
+    const safePassword = password.trim()
+
+    if (!safeUsername || !safePassword) {
+      toast.error('Usuário e senha são obrigatórios.')
+      return
+    }
+
     try {
-      await login(username, password)
+      await run(() => login(safeUsername, safePassword), { silent: true })
       toast.success('Login realizado com sucesso!')
-      navigate('/dashboard')
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Erro ao fazer login')
-    } finally {
-      setLoading(false)
+      navigate('/dashboard', { replace: true })
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Não foi possível autenticar.'))
     }
   }
 
@@ -32,30 +39,34 @@ export default function Login() {
         <h2>
           <FiShield style={{ verticalAlign: 'middle' }} /> SOC/NOC Platform
         </h2>
-        
+
         <div className="warning">
           ⚠️ <strong>AVISO:</strong> Sistema destinado exclusivamente a ambientes laboratoriais e autorizados.
         </div>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <div className="form-group">
-            <label>Usuário</label>
+            <label htmlFor="username">Usuário</label>
             <input
+              id="username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="admin"
+              autoComplete="username"
               required
             />
           </div>
 
           <div className="form-group">
-            <label>Senha</label>
+            <label htmlFor="password">Senha</label>
             <input
+              id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••"
+              autoComplete="current-password"
               required
             />
           </div>

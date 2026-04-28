@@ -6,9 +6,10 @@ honeypot, threat hunting e relatórios.
 
 ⚠️ AVISO ÉTICO: Use apenas em ambientes controlados e autorizados.
 """
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+import logging
+import os
 
 import asyncio
 import asyncpg
@@ -20,6 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+STARTUP_MAX_RETRIES = int(os.getenv("STARTUP_MAX_RETRIES", "60"))
+STARTUP_RETRY_DELAY = float(os.getenv("STARTUP_RETRY_DELAY", "2"))
 
 # Global connections
 redis_client: aioredis.Redis = None
@@ -27,65 +32,100 @@ es_client: AsyncElasticsearch = None
 pg_pool = None
 
 
+async def _connect_redis() -> aioredis.Redis:
+    client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    await client.ping()
+    return client
+
+
+async def _connect_elasticsearch() -> AsyncElasticsearch:
+    client = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
+    try:
+        health = await client.cluster.health()
+        logger.info("Elasticsearch: %s", health.get("status", "unknown"))
+        return client
+    except Exception:
+        await client.close()
+        raise
+
+
+async def _connect_postgres():
+    pg_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    return await asyncpg.create_pool(pg_url)
+
+
+async def _connect_with_retry(name: str, connector):
+    for attempt in range(1, STARTUP_MAX_RETRIES + 1):
+        try:
+            conn = await connector()
+            logger.info("%s conectado", name)
+            return conn
+        except Exception as exc:
+            logger.warning(
+                "Aguardando %s... (%s/%s): %s",
+                name,
+                attempt,
+                STARTUP_MAX_RETRIES,
+                exc,
+            )
+            await asyncio.sleep(STARTUP_RETRY_DELAY)
+
+    logger.error(
+        "%s indisponivel apos %s tentativas. Iniciando em modo degradado.",
+        name,
+        STARTUP_MAX_RETRIES,
+    )
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client, es_client, pg_pool
 
-    print("="*60)
-    print("SOC/NOC Platform - Backend API")
-    print("="*60)
+    logger.info("=" * 60)
+    logger.info("SOC/NOC Platform - Backend API")
+    logger.info("=" * 60)
 
-    # 🔴 REDIS
-    for i in range(10):
-        try:
-            redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-            await redis_client.ping()
-            app.state.redis_client = redis_client
-            print("✓ Redis conectado")
-            break
-        except Exception:
-            print(f"⏳ Aguardando Redis... ({i+1}/10)")
-            await asyncio.sleep(2)
-    else:
-        raise Exception("❌ Não conseguiu conectar no Redis")
+    app.state.redis_client = None
+    app.state.es_client = None
+    app.state.pg_pool = None
 
-    # 🟡 ELASTICSEARCH
-    es_client = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
-    health = await es_client.cluster.health()
+    redis_client = await _connect_with_retry("Redis", _connect_redis)
+    es_client = await _connect_with_retry("Elasticsearch", _connect_elasticsearch)
+    pg_pool = await _connect_with_retry("PostgreSQL", _connect_postgres)
+
+    app.state.redis_client = redis_client
     app.state.es_client = es_client
-    print(f"✓ Elasticsearch: {health.get('status', 'unknown')}")
+    app.state.pg_pool = pg_pool
 
-    # 🟢 POSTGRES
-    pg_url = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql://')
+    if settings.SECRET_KEY == "CHANGE_ME_IN_ENV":
+        logger.warning("SECRET_KEY padrao em uso. Configure SECRET_KEY em ambiente seguro.")
 
-    for i in range(10):
-        try:
-            pg_pool = await asyncpg.create_pool(pg_url)
-            app.state.pg_pool = pg_pool
-            print("✓ PostgreSQL conectado")
-            break
-        except Exception:
-            print(f"⏳ Aguardando PostgreSQL... ({i+1}/10)")
-            await asyncio.sleep(2)
-    else:
-        raise Exception("❌ Não conseguiu conectar no PostgreSQL")
-
-    print("🚀 Backend iniciado")
+    logger.info("Backend iniciado")
 
     yield  # ← ESSENCIAL
 
-    print("\nEncerrando conexões...")
+    logger.info("Encerrando conexoes...")
 
     if redis_client:
-        await redis_client.close()
+        try:
+            await redis_client.aclose()
+        except Exception:
+            pass
 
     if es_client:
-        await es_client.close()
+        try:
+            await es_client.close()
+        except Exception:
+            pass
 
     if pg_pool:
-        await pg_pool.close()
+        try:
+            await pg_pool.close()
+        except Exception:
+            pass
 
-    print("✓ Conexões encerradas")
+    logger.info("Conexoes encerradas")
 
 # Cria aplicação FastAPI
 app = FastAPI(
@@ -97,10 +137,12 @@ app = FastAPI(
 
 # CORS
 ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:5173",
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
 ]
 
 app.add_middleware(

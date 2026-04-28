@@ -1,20 +1,20 @@
 services:
-  # Redis - Message Queue
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Elasticsearch - Log Storage
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     environment:
@@ -22,18 +22,21 @@ services:
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
-      - "9200:9200"
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
-      interval: 30s
+      test:
+        - CMD-SHELL
+        - "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' | grep -Eq '\"status\":\"(yellow|green)\"'"
+      interval: 20s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # PostgreSQL - Metadata Storage
   postgres:
     image: postgres:16-alpine
     environment:
@@ -41,19 +44,20 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-soc_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc_dev_password_CHANGE_ME}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc_user} -d soc_noc"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Backend API
   backend:
     build:
       context: ./backend
@@ -64,10 +68,12 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://soc_user:soc_dev_password_CHANGE_ME@postgres:5432/soc_noc}
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-me}
       - JWT_ALGORITHM=HS256
-      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
-      - DEBUG=true
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      - DEBUG=${DEBUG:-true}
+      - STARTUP_MAX_RETRIES=${STARTUP_MAX_RETRIES:-60}
+      - STARTUP_RETRY_DELAY=${STARTUP_RETRY_DELAY:-2}
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -75,23 +81,33 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
     networks:
       - soc-network
     restart: unless-stopped
 
-  # Frontend Dashboard
   frontend:
     build:
       context: ./frontend
       dockerfile: ../docker/Dockerfile.frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Honeypot SSH
   honeypot:
     build:
       context: ./honeypot
@@ -101,21 +117,33 @@ services:
       - HONEYPOT_PORT=2222
       - HONEYPOT_HOST=0.0.0.0
     ports:
-      - "2222:2222"
+      - "${HONEYPOT_PORT:-2222}:2222"
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1', 2222), 2); s.close()"
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Log Collector Agent
   agent:
     build:
       context: ./agents
       dockerfile: ../docker/Dockerfile.agent
     environment:
       - REDIS_URL=redis://redis:6379
-      - LOG_FILES=/var/log/auth.log,/var/log/syslog
+      - LOG_FILES=/host/logs/auth.log,/host/logs/syslog
+      - STARTUP_MAX_RETRIES=${STARTUP_MAX_RETRIES:-60}
+      - STARTUP_RETRY_DELAY=${STARTUP_RETRY_DELAY:-2}
     volumes:
       - /var/log:/host/logs:ro
     depends_on:
@@ -123,8 +151,8 @@ services:
         condition: service_healthy
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Event Processor
   processor:
     build:
       context: ./processor
@@ -133,6 +161,8 @@ services:
       - REDIS_URL=redis://redis:6379
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://soc_user:soc_dev_password_CHANGE_ME@postgres:5432/soc_noc}
+      - STARTUP_MAX_RETRIES=${STARTUP_MAX_RETRIES:-60}
+      - STARTUP_RETRY_DELAY=${STARTUP_RETRY_DELAY:-2}
     depends_on:
       redis:
         condition: service_healthy
@@ -140,10 +170,18 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import os,time,sys; p='/tmp/processor_heartbeat'; sys.exit(0 if os.path.exists(p) and (time.time() - os.path.getmtime(p)) < 45 else 1)\""
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - soc-network
+    restart: unless-stopped
 
-  # Attack Simulator (para testes em lab)
   simulator:
     build:
       context: ./simulator
@@ -152,11 +190,13 @@ services:
       - HONEYPOT_HOST=honeypot
       - HONEYPOT_PORT=2222
     depends_on:
-      - honeypot
+      honeypot:
+        condition: service_healthy
     profiles:
       - simulation
     networks:
       - soc-network
+    restart: unless-stopped
 
 volumes:
   redis_data:
