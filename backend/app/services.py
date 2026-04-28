@@ -153,13 +153,22 @@ class AuthService:
             return True
 
 
+    def parse_dt(value):
+        """Converte string ISO para datetime (compatível com Pydantic)."""
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except Exception:
+                return datetime.utcnow()
+        return value or datetime.utcnow()
+
 class EventService:
     """Serviço de eventos de segurança."""
     
     def __init__(self, db_pool, elasticsearch):
         self.db_pool = db_pool
         self.es = elasticsearch
-        
+
     async def query_events(self, filters: dict, page: int = 1, page_size: int = 50) -> dict:
         """Consulta eventos com filtros."""
         # Build Elasticsearch query
@@ -208,24 +217,52 @@ class EventService:
         )
         
         # Total count
-        total = await self.es.count(
-            index="soc_events",
-            query={"match_all": {}} if not isinstance(query, dict) or 'match_all' in str(query) else query
-        )
-        
+        total = response['hits']['total']['value']
+
         events = []
+        from datetime import datetime
         for hit in response['hits']['hits']:
-            event = hit['_source']
-            event['id'] = hit['_id']
-            events.append(event)
+                src = hit['_source']
+                event = {
+                    "id": hit['_id'],
+
+                    # Base
+                    "event_type": src.get("event_type", "unknown"),
+                    "source": src.get("source", "unknown"),
+                    "severity": src.get("severity", "low"),
+            
+                    # Network
+                    "source_ip": src.get("source_ip"),
+                    "destination_ip": src.get("destination_ip"),
+                    "source_port": src.get("source_port"),
+                    "destination_port": src.get("destination_port"),
+                    "protocol": src.get("protocol"),
+            
+                    # Context
+                    "username": src.get("username"),
+                    "command": src.get("command"),
+                    "mitre_technique_id": src.get("mitre_technique_id"),
+                    "mitre_tactic": src.get("mitre_tactic"),
+            
+                    # ⚠️ CAMPOS OBRIGATÓRIOS (aqui estava o erro)
+                    "timestamp": parse_dt(src.get("timestamp")),
+                    "created_at": parse_dt(src.get("created_at") or src.get("timestamp")),
+                    "status": src.get("status", "new"),
+            
+                    # Extras
+                    "analyst_id": src.get("analyst_id"),
+                    "resolution_notes": src.get("resolution_notes"),
+                }
+
+                events.append(event)  
             
         return {
             "events": events,
-            "total": total['count'] if isinstance(total, dict) else len(events),
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "has_next": (page * page_size) < (total['count'] if isinstance(total, dict) else len(events))
-        }
+            "has_next": (page * page_size) < total
+            }
         
     async def get_event(self, event_id: str) -> Optional[dict]:
         """Obtém evento por ID."""

@@ -104,7 +104,7 @@ O simulador irá:
 ./start.sh stop
 
 # OU
-docker compose down
+docker compose downdocker compose --profile simulation up -d simulator
 ```
 
 ### Reiniciar

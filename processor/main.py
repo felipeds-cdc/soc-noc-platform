@@ -199,7 +199,26 @@ class EventProcessor:
         try:
             # Parse e normalização
             processed_event = await self._parse_and_normalize(event_data)
-            
+            if processed_event.get('event_type') == 'honeypot_login':
+                source_ip = processed_event.get('source_ip')
+
+                if source_ip:
+                    key = f"ssh_attempts:{source_ip}"
+
+                    # Incrementa no Redis
+                    attempts = await self.redis.incr(key)
+                    logger.info(f"[SSH ATTEMPTS] {source_ip} = {attempts}")
+
+                    # Se >= 5 tentativas → gera alerta
+                    if attempts >= 5:
+                        await self.redis.xadd('soc_events', {
+                            'event_type': 'ssh_bruteforce_detected',
+                            'source': 'processor',
+                            'source_ip': source_ip,
+                            'attempts': attempts,
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+
             # Enriquecimento
             processed_event = await self._enrich_event(processed_event)
             
@@ -231,9 +250,8 @@ class EventProcessor:
             try:
                 event['parsed_data'] = json.loads(event['data'])
                 # Merge parsed data com evento principal
-                for key, value in event['parsed_data'].items():
-                    if key not in event:
-                        event[key] = value
+                if 'parsed_data' in event:
+                    event.update(event['parsed_data'])
             except json.JSONDecodeError:
                 event['parsed_data'] = {}
                 

@@ -10,6 +10,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import asyncio
 import asyncpg
 import redis.asyncio as aioredis
 from elasticsearch import AsyncElasticsearch
@@ -28,47 +29,63 @@ pg_pool = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Gerencia ciclo de vida da aplicação."""
     global redis_client, es_client, pg_pool
-    
-    # Startup
+
     print("="*60)
-    print("  SOC/NOC Platform - Backend API")
-    print("  ⚠️  AVISO: Uso exclusivo em ambientes laboratoriais")
+    print("SOC/NOC Platform - Backend API")
     print("="*60)
-    
-    # Redis
-    redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-    await redis_client.ping()
-    app.state.redis_client = redis_client
-    print(f"✓ Redis conectado: {settings.REDIS_URL}")
-    
-    # Elasticsearch
+
+    # 🔴 REDIS
+    for i in range(10):
+        try:
+            redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            await redis_client.ping()
+            app.state.redis_client = redis_client
+            print("✓ Redis conectado")
+            break
+        except Exception:
+            print(f"⏳ Aguardando Redis... ({i+1}/10)")
+            await asyncio.sleep(2)
+    else:
+        raise Exception("❌ Não conseguiu conectar no Redis")
+
+    # 🟡 ELASTICSEARCH
     es_client = AsyncElasticsearch([settings.ELASTICSEARCH_URL])
     health = await es_client.cluster.health()
     app.state.es_client = es_client
-    print(f"✓ Elasticsearch conectado: {health.get('status', 'unknown')}")
-    
-    # PostgreSQL
+    print(f"✓ Elasticsearch: {health.get('status', 'unknown')}")
+
+    # 🟢 POSTGRES
     pg_url = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql://')
-    pg_pool = await asyncpg.create_pool(pg_url)
-    app.state.pg_pool = pg_pool
-    print(f"✓ PostgreSQL conectado: {settings.DATABASE_URL}")
-    
-    print("\n🚀 Backend API iniciado!")
-    
-    yield
-    
-    # Shutdown
+
+    for i in range(10):
+        try:
+            pg_pool = await asyncpg.create_pool(pg_url)
+            app.state.pg_pool = pg_pool
+            print("✓ PostgreSQL conectado")
+            break
+        except Exception:
+            print(f"⏳ Aguardando PostgreSQL... ({i+1}/10)")
+            await asyncio.sleep(2)
+    else:
+        raise Exception("❌ Não conseguiu conectar no PostgreSQL")
+
+    print("🚀 Backend iniciado")
+
+    yield  # ← ESSENCIAL
+
     print("\nEncerrando conexões...")
+
     if redis_client:
         await redis_client.close()
+
     if es_client:
         await es_client.close()
+
     if pg_pool:
         await pg_pool.close()
-    print("✓ Conexões encerradas")
 
+    print("✓ Conexões encerradas")
 
 # Cria aplicação FastAPI
 app = FastAPI(
@@ -79,12 +96,18 @@ app = FastAPI(
 )
 
 # CORS
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 

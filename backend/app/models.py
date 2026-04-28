@@ -105,6 +105,7 @@ class EventResponse(EventBase):
 
     class Config:
         from_attributes = True
+        extra = "allow"
 
 
 class EventUpdate(BaseModel):

@@ -208,7 +208,7 @@ class HoneypotSSHServerSession(asyncssh.SSHServer):
         self.session_id = session.session_id
         self.honeypot.active_sessions[session.session_id] = session
 
-        asyncio.create_task(self.honeypot.publish_event('honeypot_login', {
+        asyncio.ensure_future(self.honeypot.publish_event('honeypot_login', {
             'session_id': session.session_id,
             'username': username,
             'password': password,
@@ -334,6 +334,7 @@ async def start_honeypot():
             password_auth=True,
             public_key_auth=False,
             kbdint_auth=False,
+            authorized_client_keys=None,
         )
         logger.info(f"Honeypot SSH ouvindo em {HONEYPOT_HOST}:{HONEYPOT_PORT}")
 

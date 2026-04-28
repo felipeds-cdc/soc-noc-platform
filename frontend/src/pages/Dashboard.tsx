@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell
+} from 'recharts'
 import { FiActivity, FiAlertTriangle, FiShield, FiTerminal, FiGlobe, FiUsers } from 'react-icons/fi'
 import api from '../services/api'
 
@@ -14,7 +17,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 30000) // Atualiza a cada 30s
+    const interval = setInterval(loadData, 30000)
     return () => clearInterval(interval)
   }, [])
 
@@ -27,15 +30,41 @@ export default function Dashboard() {
         api.get('/api/dashboard/honeypot/sessions'),
       ])
 
-      setKpis(kpisRes.data)
-      setTimeSeries(timeRes.data)
-      setTopItems(topRes.data)
-      setHoneypotSessions(honeypotRes.data.sessions || [])
+      console.log("HONEYPOT RAW:", honeypotRes.data)
+
+      // 🔥 Trata Elasticsearch ou API padrão
+      const rawSessions = honeypotRes.data.sessions || honeypotRes.data || []
+
+      const parsedSessions = rawSessions.map((s: any) => s._source || s)
+
+      setKpis(kpisRes.data || {})
+      setTimeSeries(timeRes.data || { events: [], alerts: [] })
+      setTopItems(topRes.data || {})
+      setHoneypotSessions(parsedSessions)
+
     } catch (error) {
       console.error('Erro ao carregar dados:', error)
     } finally {
       setLoading(false)
     }
+  }
+
+  // 🔥 Função segura para acessar campos (fallback em data JSON)
+  const getField = (obj: any, field: string) => {
+    if (obj?.[field]) return obj[field]
+
+    if (obj?.data) {
+      try {
+        const parsed = typeof obj.data === 'string'
+          ? JSON.parse(obj.data)
+          : obj.data
+        return parsed?.[field]
+      } catch {
+        return undefined
+      }
+    }
+
+    return undefined
   }
 
   if (loading) {
@@ -47,57 +76,47 @@ export default function Dashboard() {
       <div className="header">
         <h2>Dashboard</h2>
         <div className="header-actions">
-          <span className="user-badge">Última atualização: {new Date().toLocaleTimeString('pt-BR')}</span>
+          <span className="user-badge">
+            Última atualização: {new Date().toLocaleTimeString('pt-BR')}
+          </span>
         </div>
       </div>
 
       {/* KPIs */}
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-label">
-            <FiActivity /> Total de Eventos (24h)
-          </div>
+          <div className="kpi-label"><FiActivity /> Total de Eventos (24h)</div>
           <div className="kpi-value">{kpis?.total_events_24h || 0}</div>
         </div>
 
         <div className="kpi-card critical">
-          <div className="kpi-label">
-            <FiAlertTriangle /> Alertas Críticos
-          </div>
+          <div className="kpi-label"><FiAlertTriangle /> Alertas Críticos</div>
           <div className="kpi-value" style={{ color: 'var(--accent-red)' }}>
             {kpis?.critical_alerts || 0}
           </div>
         </div>
 
         <div className="kpi-card warning">
-          <div className="kpi-label">
-            <FiShield /> Alertas Altos
-          </div>
+          <div className="kpi-label"><FiShield /> Alertas Altos</div>
           <div className="kpi-value" style={{ color: 'var(--accent-yellow)' }}>
             {kpis?.high_alerts || 0}
           </div>
         </div>
 
         <div className="kpi-card success">
-          <div className="kpi-label">
-            <FiTerminal /> Sessões Honeypot
-          </div>
+          <div className="kpi-label"><FiTerminal /> Sessões Honeypot</div>
           <div className="kpi-value" style={{ color: 'var(--accent-green)' }}>
-            {kpis?.honeypot_sessions_24h || 0}
+            {kpis?.honeypot_sessions_24h || honeypotSessions.length}
           </div>
         </div>
 
         <div className="kpi-card">
-          <div className="kpi-label">
-            <FiGlobe /> IPs Únicos
-          </div>
+          <div className="kpi-label"><FiGlobe /> IPs Únicos</div>
           <div className="kpi-value">{kpis?.unique_source_ips || 0}</div>
         </div>
 
         <div className="kpi-card warning">
-          <div className="kpi-label">
-            <FiUsers /> Tentativas Brute Force
-          </div>
+          <div className="kpi-label"><FiUsers /> Tentativas Brute Force</div>
           <div className="kpi-value">{kpis?.brute_force_attempts || 0}</div>
         </div>
       </div>
@@ -105,43 +124,28 @@ export default function Dashboard() {
       {/* Charts */}
       <div className="grid-2">
         <div className="card">
-          <div className="card-header">
-            <h3>Timeline de Eventos</h3>
-          </div>
+          <div className="card-header"><h3>Timeline de Eventos</h3></div>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={timeSeries.events || []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="timestamp" stroke="var(--text-secondary)" tick={{ fontSize: 12 }} />
-                <YAxis stroke="var(--text-secondary)" />
-                <Tooltip 
-                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
-                />
-                <Line type="monotone" dataKey="count" stroke="var(--accent-blue)" strokeWidth={2} dot={false} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="timestamp" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         <div className="card">
-          <div className="card-header">
-            <h3>Top Países de Origem</h3>
-          </div>
+          <div className="card-header"><h3>Top Países</h3></div>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie
-                  data={topItems.top_countries || []}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ key, percent }) => `${key} ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="count"
-                >
-                  {(topItems.top_countries || []).map((_: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                <Pie data={topItems.top_countries || []} dataKey="count" cx="50%" cy="50%" outerRadius={80}>
+                  {(topItems.top_countries || []).map((_: any, i: number) => (
+                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip />
@@ -149,74 +153,43 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h3>Top IPs de Origem</h3>
-          </div>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topItems.top_source_ips || []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="key" stroke="var(--text-secondary)" tick={{ fontSize: 11 }} />
-                <YAxis stroke="var(--text-secondary)" />
-                <Tooltip 
-                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
-                />
-                <Bar dataKey="count" fill="var(--accent-blue)" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h3>Tipos de Eventos</h3>
-          </div>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topItems.top_event_types || []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-                <XAxis dataKey="key" stroke="var(--text-secondary)" tick={{ fontSize: 11 }} />
-                <YAxis stroke="var(--text-secondary)" />
-                <Tooltip 
-                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
-                />
-                <Bar dataKey="count" fill="var(--accent-purple)" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
       </div>
 
-      {/* Recent Honeypot Sessions */}
+      {/* Honeypot Table */}
       <div className="card">
         <div className="card-header">
           <h3>Últimas Sessões do Honeypot</h3>
         </div>
+
         <div className="table-container">
           <table>
             <thead>
               <tr>
-                <th>IP de Origem</th>
-                <th>Username</th>
+                <th>IP</th>
+                <th>User</th>
                 <th>Password</th>
                 <th>País</th>
                 <th>Duração</th>
                 <th>Início</th>
               </tr>
             </thead>
+
             <tbody>
-              {honeypotSessions.slice(0, 10).map((session: any) => (
-                <tr key={session.session_id}>
-                  <td>{session.source_ip}</td>
-                  <td><code>{session.username}</code></td>
-                  <td><code>{session.password}</code></td>
-                  <td>{session.geo_country || 'N/A'}</td>
-                  <td>{session.session_duration || 0}s</td>
-                  <td>{new Date(session.started_at).toLocaleString('pt-BR')}</td>
+              {honeypotSessions.slice(0, 10).map((s: any, i: number) => (
+                <tr key={s.session_id || i}>
+                  <td>{getField(s, 'source_ip') || 'N/A'}</td>
+                  <td><code>{getField(s, 'username') || 'N/A'}</code></td>
+                  <td><code>{getField(s, 'password') || 'N/A'}</code></td>
+                  <td>{s.geo_country || 'N/A'}</td>
+                  <td>{s.session_duration ? `${s.session_duration}s` : '0s'}</td>
+                  <td>
+                    {s.started_at
+                      ? new Date(s.started_at).toLocaleString('pt-BR')
+                      : 'N/A'}
+                  </td>
                 </tr>
               ))}
+
               {honeypotSessions.length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '20px' }}>
@@ -225,6 +198,7 @@ export default function Dashboard() {
                 </tr>
               )}
             </tbody>
+
           </table>
         </div>
       </div>
